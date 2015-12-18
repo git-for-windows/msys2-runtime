@@ -648,7 +648,7 @@ fhandler_netdrive::readdir (DIR *dir, dirent *de)
       goto out;
     }
 
-  sys_wcstombs (de->d_name, sizeof de->d_name, DIR_cache[dir->__d_position]);
+  sys_wcstombs_path (de->d_name, sizeof de->d_name, DIR_cache[dir->__d_position]);
   if (strlen (dir->__d_dirname) == 2)
     de->d_ino = hash_path_name (get_ino (), de->d_name);
   else
