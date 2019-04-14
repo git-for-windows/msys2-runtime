@@ -882,7 +882,11 @@ fhandler_pty_slave::open (int flags, mode_t)
       pipe_reply repl;
       DWORD len;
 
+#ifdef __MSYS__
+      __small_sprintf (buf, "\\\\.\\pipe\\msys-%S-pty%d-master-ctl",
+#else
       __small_sprintf (buf, "\\\\.\\pipe\\cygwin-%S-pty%d-master-ctl",
+#endif
 		       &cygheap->installation_key, get_minor ());
       termios_printf ("dup handles via master control pipe %s", buf);
       if (!CallNamedPipe (buf, &req, sizeof req, &repl, sizeof repl,
@@ -1144,7 +1148,11 @@ fhandler_pty_slave::reset_switch_to_nat_pipe (void)
 		    {
 		      char pipe[MAX_PATH];
 		      __small_sprintf (pipe,
+#ifdef __MSYS__
+			       "\\\\.\\pipe\\msys-%S-pty%d-master-ctl",
+#else
 			       "\\\\.\\pipe\\cygwin-%S-pty%d-master-ctl",
+#endif
 			       &cygheap->installation_key, get_minor ());
 		      pipe_request req = { GET_HANDLES, GetCurrentProcessId () };
 		      pipe_reply repl;
@@ -1605,9 +1613,15 @@ fhandler_pty_slave::tcflush (int queue)
   if (queue == TCIFLUSH || queue == TCIOFLUSH)
     {
       char pipe[MAX_PATH];
+#ifdef __MSYS__
+      __small_sprintf (pipe,
+		       "\\\\.\\pipe\\msys-%S-pty%d-master-ctl",
+		       &cygheap->installation_key, get_minor ());
+#else
       __small_sprintf (pipe,
 		       "\\\\.\\pipe\\cygwin-%S-pty%d-master-ctl",
 		       &cygheap->installation_key, get_minor ());
+#endif
       pipe_request req = { FLUSH_INPUT, GetCurrentProcessId () };
       pipe_reply repl;
       DWORD n;
@@ -2039,7 +2053,11 @@ fhandler_pty_master::close (int flag)
 	  pipe_reply repl;
 	  DWORD len;
 
+#ifdef __MSYS__
+	  __small_sprintf (buf, "\\\\.\\pipe\\msys-%S-pty%d-master-ctl",
+#else
 	  __small_sprintf (buf, "\\\\.\\pipe\\cygwin-%S-pty%d-master-ctl",
+#endif
 			   &cygheap->installation_key, get_minor ());
 	  acquire_output_mutex (mutex_timeout);
 	  if (master_ctl)
@@ -2950,7 +2968,11 @@ fhandler_pty_master::setup ()
 
   /* Create master control pipe which allows the master to duplicate
      the pty pipe handles to processes which deserve it. */
+#ifdef __MSYS__
+  __small_sprintf (buf, "\\\\.\\pipe\\msys-%S-pty%d-master-ctl",
+#else
   __small_sprintf (buf, "\\\\.\\pipe\\cygwin-%S-pty%d-master-ctl",
+#endif
 		   &cygheap->installation_key, unit);
   master_ctl = CreateNamedPipe (buf, PIPE_ACCESS_DUPLEX
 				     | FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -3840,7 +3862,11 @@ fhandler_pty_slave::transfer_input (tty::xfer_dir dir, HANDLE from, tty *ttyp,
     {
       char pipe[MAX_PATH];
       __small_sprintf (pipe,
+#ifdef __MSYS__
+		       "\\\\.\\pipe\\msys-%S-pty%d-master-ctl",
+#else
 		       "\\\\.\\pipe\\cygwin-%S-pty%d-master-ctl",
+#endif
 		       &cygheap->installation_key, ttyp->get_minor ());
       pipe_request req = { GET_HANDLES, GetCurrentProcessId () };
       pipe_reply repl;
