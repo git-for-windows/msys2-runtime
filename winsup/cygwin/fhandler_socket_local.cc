@@ -673,11 +673,12 @@ fhandler_socket_local::fcntl (int cmd, intptr_t arg)
 int __reg2
 fhandler_socket_local::fstat (struct stat *buf)
 {
-  int res;
-
-  if (get_sun_path () && get_sun_path ()[0] == '\0')
+  if (!dev ().isfs ())
+    /* fstat called on a socket. */
     return fhandler_socket_wsock::fstat (buf);
-  res = fhandler_base::fstat_fs (buf);
+
+  /* stat/lstat on a socket file or fstat on a socket opened w/ O_PATH. */
+  int res = fhandler_base::fstat_fs (buf);
   if (!res)
     {
       buf->st_mode = (buf->st_mode & ~S_IFMT) | S_IFSOCK;
@@ -689,8 +690,11 @@ fhandler_socket_local::fstat (struct stat *buf)
 int __reg2
 fhandler_socket_local::fstatvfs (struct statvfs *sfs)
 {
-  if (get_sun_path () && get_sun_path ()[0] == '\0')
+  if (!dev ().isfs ())
+    /* fstatvfs called on a socket. */
     return fhandler_socket_wsock::fstatvfs (sfs);
+
+  /* statvfs on a socket file or fstatvfs on a socket opened w/ O_PATH. */
   if (get_flags () & O_PATH)
     /* We already have a handle. */
     {
@@ -706,8 +710,12 @@ fhandler_socket_local::fstatvfs (struct statvfs *sfs)
 int
 fhandler_socket_local::fchmod (mode_t newmode)
 {
-  if (get_sun_path () && get_sun_path ()[0] == '\0')
+  if (!dev ().isfs ())
+    /* fchmod called on a socket. */
     return fhandler_socket_wsock::fchmod (newmode);
+
+  /* chmod on a socket file.  [We won't get here if fchmod is called
+     on a socket opened w/ O_PATH.] */
   fhandler_disk_file fh (pc);
   fh.get_device () = FH_FS;
   return fh.fchmod (S_IFSOCK | adjust_socket_file_mode (newmode));
@@ -716,8 +724,12 @@ fhandler_socket_local::fchmod (mode_t newmode)
 int
 fhandler_socket_local::fchown (uid_t uid, gid_t gid)
 {
-  if (get_sun_path () && get_sun_path ()[0] == '\0')
+  if (!dev ().isfs ())
+    /* fchown called on a socket. */
     return fhandler_socket_wsock::fchown (uid, gid);
+
+  /* chown/lchown on a socket file.  [We won't get here if fchown is
+     called on a socket opened w/ O_PATH.] */
   fhandler_disk_file fh (pc);
   return fh.fchown (uid, gid);
 }
@@ -725,8 +737,12 @@ fhandler_socket_local::fchown (uid_t uid, gid_t gid)
 int
 fhandler_socket_local::facl (int cmd, int nentries, aclent_t *aclbufp)
 {
-  if (get_sun_path () && get_sun_path ()[0] == '\0')
+  if (!dev ().isfs ())
+    /* facl called on a socket. */
     return fhandler_socket_wsock::facl (cmd, nentries, aclbufp);
+
+  /* facl on a socket file.  [We won't get here if facl is called on a
+     socket opened w/ O_PATH.] */
   fhandler_disk_file fh (pc);
   return fh.facl (cmd, nentries, aclbufp);
 }
@@ -734,9 +750,14 @@ fhandler_socket_local::facl (int cmd, int nentries, aclent_t *aclbufp)
 int
 fhandler_socket_local::link (const char *newpath)
 {
-  if (get_sun_path () && get_sun_path ()[0] == '\0')
+  if (!dev ().isfs ())
+    /* linkat w/ AT_EMPTY_PATH called on a socket not opened w/ O_PATH. */
     return fhandler_socket_wsock::link (newpath);
+  /* link on a socket file or linkat w/ AT_EMPTY_PATH called on a
+     socket opened w/ O_PATH. */
   fhandler_disk_file fh (pc);
+  if (get_flags () & O_PATH)
+    fh.set_handle (get_handle ());
   return fh.link (newpath);
 }
 
@@ -1212,7 +1233,7 @@ fhandler_socket_local::recv_internal (LPWSAMSG wsamsg, bool use_recvmsg)
 		  --wsacnt;
 		}
 	    }
-	  if (!wret)
+	  if (!wsacnt)
 	    break;
 	}
       else if (WSAGetLastError () != WSAEWOULDBLOCK)
@@ -1430,10 +1451,14 @@ fhandler_socket_local::setsockopt (int level, int optname, const void *optval,
 	     FIXME: In the long run we should find a more generic solution
 	     which doesn't require a blocking handshake in accept/connect
 	     to exchange SO_PEERCRED credentials. */
-	  if (optval || optlen)
-	    set_errno (EINVAL);
-	  else
+	  /* Temporary: Allow SO_PEERCRED to only be zeroed. Two ways to
+	     accomplish this: pass NULL,0 for optval,optlen; or pass the
+	     address,length of an '(int) 0' set up by the caller. */
+	  if ((!optval && !optlen) ||
+		(optlen == (socklen_t) sizeof (int) && !*(int *) optval))
 	    ret = af_local_set_no_getpeereid ();
+	  else
+	    set_errno (EINVAL);
 	  return ret;
 
 	case SO_REUSEADDR:

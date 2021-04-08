@@ -131,25 +131,28 @@ fhandler_fifo::fhandler_fifo ():
   fhandler_base (),
   read_ready (NULL), write_ready (NULL), writer_opening (NULL),
   owner_needed_evt (NULL), owner_found_evt (NULL), update_needed_evt (NULL),
-  cancel_evt (NULL), thr_sync_evt (NULL),
+  cancel_evt (NULL), thr_sync_evt (NULL), pipe_name_buf (NULL),
   fc_handler (NULL), shandlers (0), nhandlers (0),
   reader (false), writer (false), duplexer (false),
   max_atomic_write (DEFAULT_PIPEBUFSIZE),
   me (null_fr_id), shmem_handle (NULL), shmem (NULL),
   shared_fc_hdl (NULL), shared_fc_handler (NULL)
 {
-  pipe_name_buf[0] = L'\0';
   need_fork_fixup (true);
 }
 
 PUNICODE_STRING
 fhandler_fifo::get_pipe_name ()
 {
-  if (!pipe_name_buf[0])
+  if (!pipe_name_buf)
     {
+      pipe_name.Length = CYGWIN_FIFO_PIPE_NAME_LEN * sizeof (WCHAR);
+      pipe_name.MaximumLength = pipe_name.Length + sizeof (WCHAR);
+      pipe_name_buf = (PWCHAR) cmalloc_abort (HEAP_STR,
+					      pipe_name.MaximumLength);
+      pipe_name.Buffer = pipe_name_buf;
       __small_swprintf (pipe_name_buf, L"%S-fifo.%08x.%016X",
 			&cygheap->installation_key, get_dev (), get_ino ());
-      RtlInitUnicodeString (&pipe_name, pipe_name_buf);
     }
   return &pipe_name;
 }
@@ -377,14 +380,14 @@ fhandler_fifo::add_client_handler (bool new_pipe_instance)
   return 0;
 }
 
-/* Always called with fifo_client_lock in place. */
+/* Always called with fifo_client_lock in place.  Delete a
+   client_handler by swapping it with the last one in the list. */
 void
 fhandler_fifo::delete_client_handler (int i)
 {
   fc_handler[i].close ();
   if (i < --nhandlers)
-    memmove (fc_handler + i, fc_handler + i + 1,
-	     (nhandlers - i) * sizeof (fc_handler[i]));
+    fc_handler[i] = fc_handler[nhandlers];
 }
 
 /* Delete handlers that we will never read from.  Always called with
@@ -392,15 +395,10 @@ fhandler_fifo::delete_client_handler (int i)
 void
 fhandler_fifo::cleanup_handlers ()
 {
-  int i = 0;
-
-  while (i < nhandlers)
-    {
-      if (fc_handler[i].get_state () < fc_connected)
-	delete_client_handler (i);
-      else
-	i++;
-    }
+  /* Work from the top down to try to avoid copying. */
+  for (int i = nhandlers - 1; i >= 0; --i)
+    if (fc_handler[i].get_state () < fc_connected)
+      delete_client_handler (i);
 }
 
 /* Always called with fifo_client_lock in place. */
@@ -457,6 +455,7 @@ fhandler_fifo::update_my_handlers ()
 	}
     }
   fifo_client_unlock ();
+  NtClose (prev_proc);
   set_prev_owner (null_fr_id);
   return ret;
 }
@@ -1493,6 +1492,29 @@ maybe_retry:
     }
 errout:
   len = (size_t) -1;
+}
+
+int __reg2
+fhandler_fifo::fstat (struct stat *buf)
+{
+  if (reader || writer || duplexer)
+    {
+      /* fhandler_fifo::open has been called, and O_PATH is not set.
+	 We don't want to call fhandler_base::fstat.  In the writer
+	 and duplexer cases we have a handle, but it's a pipe handle
+	 rather than a file handle, so it's not suitable for stat.  In
+	 the reader case we don't have a handle, but
+	 fhandler_base::fstat would call fhandler_base::open, which
+	 would modify the flags and status_flags. */
+      fhandler_disk_file fh (pc);
+      fh.get_device () = FH_FS;
+      int res = fh.fstat (buf);
+      buf->st_dev = buf->st_rdev = dev ();
+      buf->st_mode = dev ().mode ();
+      buf->st_size = 0;
+      return res;
+    }
+  return fhandler_base::fstat (buf);
 }
 
 int __reg2

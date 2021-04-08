@@ -194,7 +194,7 @@ void close_all_files (bool = false);
 
 /* debug_on_trap support. see exceptions.cc:try_to_debug() */
 extern "C" void error_start_init (const char*);
-extern "C" int try_to_debug (bool waitloop = 1);
+extern "C" int try_to_debug ();
 
 void ld_preload ();
 void fixup_hooks_after_fork ();
@@ -227,9 +227,6 @@ void __stdcall set_console_title (char *);
 void init_console_handler (bool);
 
 extern bool wsock_started;
-
-/* PTY related */
-void set_ishybrid_and_switch_to_pcon (HANDLE h);
 
 /* Printf type functions */
 extern "C" void vapi_fatal (const char *, va_list ap) __attribute__ ((noreturn));

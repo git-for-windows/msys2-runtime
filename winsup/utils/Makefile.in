@@ -9,36 +9,26 @@
 srcdir:=@srcdir@
 target_builddir:=@target_builddir@
 winsup_srcdir:=@winsup_srcdir@
-configure_args=@configure_args@
 
-export CC:=@CC@
-export CXX:=@CXX@
+CC:=@CC@
+CXX:=@CXX@
 
 CFLAGS_COMMON=-Wimplicit-fallthrough=4 -Werror
 CFLAGS:=@CFLAGS@
 CXXFLAGS:=@CXXFLAGS@
+INCLUDES:=@INCLUDES@
 override CFLAGS+=${CFLAGS_COMMON}
-override CXXFLAGS+=-fno-exceptions -fno-rtti ${CFLAGS_COMMON}
+override CXXFLAGS+=${CFLAGS_COMMON}
 
 include ${srcdir}/../Makefile.common
 
 cygwin_build:=${target_builddir}/winsup/cygwin
-
-cygwin_headers:=@cygwin_headers@
-
-# environment variables used by ccwrap
-export CCWRAP_HEADERS:=. ${srcdir} $(call justdir,${cygwin_headers})
-export CCWRAP_SYSTEM_HEADERS:=${cygwin_headers} @newlib_headers@
-export CCWRAP_DIRAFTER_HEADERS:=@windows_headers@
-
-WINDOWS_LIBDIR:=@windows_libdir@
 
 prefix:=@prefix@
 exec_prefix:=@exec_prefix@
 
 bindir:=@bindir@
 libexecdir = @libexecdir@
-program_transform_name:=@program_transform_name@
 
 override INSTALL:=@INSTALL@
 override INSTALL_PROGRAM:=@INSTALL_PROGRAM@
@@ -50,7 +40,7 @@ EXEEXT_FOR_BUILD:=@EXEEXT_FOR_BUILD@
 .PHONY: all install clean realclean warn_dumper warn_cygcheck_zlib
 
 LDLIBS := -lnetapi32 -ladvapi32 -lkernel32 -luser32
-CYGWIN_LDFLAGS := -static -Wl,--enable-auto-import -L${WINDOWS_LIBDIR} $(LDLIBS)
+CYGWIN_LDFLAGS := -static -Wl,--enable-auto-import $(LDLIBS)
 DEP_LDLIBS := $(cygwin_build)/libmsys-2.0.a
 
 MINGW_CXX      := @MINGW_CXX@
@@ -64,7 +54,9 @@ CYGWIN_BINS := ${addsuffix .exe,chattr cygpath gencat getconf getfacl ldd locale
 
 # List all binaries to be linked in MinGW mode.  Each binary on this list
 # must have a corresponding .o of the same name.
+ifdef MINGW_CXX
 MINGW_BINS := ${addsuffix .exe,cygcheck cygwin-console-helper ldh strace}
+endif
 
 # List all objects to be compiled in MinGW mode.  Any object not on this
 # list will will be compiled in Cygwin mode implicitly, so there is no
@@ -137,19 +129,15 @@ testsuite.exe: path-testsuite.o
 path-testsuite.cc: path.cc ; @test -L $@ || ln -sf ${filter %.cc,$^} $@
 path-testsuite.o: MINGW_CXXFLAGS += -DTESTSUITE
 # this is necessary because this .c lives in the build dir instead of src
-path-testsuite.o: MINGW_CXX := ${patsubst -I.,-I$(utils_source),$(MINGW_CXX)}
+path-testsuite.o: MINGW_CXXFLAGS += -I$(srcdir)
 path-testsuite.cc path.cc testsuite.cc: testsuite.h
 check: testsuite.exe ; $(<D)/$(<F)
 
 # the rest of this file contains generic rules
 
 # how to compile a MinGW object
-${MINGW_OBJS}: override CXX:=${MINGW_CXX}
-${MINGW_OBJS}: CCWRAP_HEADERS:=${srcdir}
-${MINGW_OBJS}: CCWRAP_SYSTEM_HEADERS:=
-# ${MINGW_OBJS}: CCWRAP_DIRAFTER_HEADERS:=
 $(MINGW_OBJS): %.o: %.cc
-	c++wrap -c -o $@ ${CXXFLAGS} $(MINGW_CXXFLAGS) $<
+	${MINGW_CXX} -c -o $@ ${CXXFLAGS} $(MINGW_CXXFLAGS) $<
 
 # how to link a MinGW binary
 $(MINGW_BINS): %.exe: %.o
@@ -192,16 +180,12 @@ realclean: clean
 install: all
 	/bin/mkdir -p ${DESTDIR}${bindir}
 	for i in $(CYGWIN_BINS) ${filter-out testsuite.exe,$(MINGW_BINS)} ; do \
-	  n=`echo $$i | sed '$(program_transform_name)'`; \
-	  $(INSTALL_PROGRAM) $$i $(DESTDIR)$(bindir)/$$n; \
+	  $(INSTALL_PROGRAM) $$i $(DESTDIR)$(bindir)/$$i; \
 	done
 	/bin/mkdir -p ${DESTDIR}${libexecdir}
 	for n in getprocaddr32 getprocaddr64; do \
 	  $(INSTALL_PROGRAM) $$n $(DESTDIR)$(libexecdir)/$$n; \
 	done
-
-$(cygwin_build)/libmsys-2.0.a: $(cygwin_build)/Makefile
-	@$(MAKE) -C $(@D) $(@F)
 
 .PHONY: warn_dumper
 warn_dumper:
@@ -211,6 +195,3 @@ warn_dumper:
 	@echo '*** If you need this program, check out the naked-bfd and naked-intl'
 	@echo '*** sources from sourceware.org.  Then, configure and build these'
 	@echo '*** libraries.  Otherwise, you can safely ignore this warning.'
-
-Makefile: Makefile.in config.status
-	/bin/sh ./config.status

@@ -315,7 +315,7 @@ fhandler_proc::open (int flags, mode_t mode)
 	}
       else
 	{
-	  flags |= O_DIROPEN;
+	  diropen = true;
 	  goto success;
 	}
     }
@@ -342,7 +342,7 @@ fhandler_proc::open (int flags, mode_t mode)
 	      }
 	    else
 	      {
-		flags |= O_DIROPEN;
+		diropen = true;
 		goto success;
 	      }
 	  }
@@ -1293,7 +1293,7 @@ format_proc_cpuinfo (void *, char *&destbuf)
 
 /* features scattered in various CPUID levels. */
       /* cpuid 0x80000007 edx */
-      if (maxf >= 0x00000007)
+      if (maxe >= 0x80000007)
 	{
 	  cpuid (&unused, &unused, &unused, &features1, 0x80000007);
 
@@ -1330,13 +1330,6 @@ format_proc_cpuinfo (void *, char *&destbuf)
 	  ftcprint (features1,  7, "hw_pstate");	/* hw P state */
 	  ftcprint (features1, 11, "proc_feedback"); /* proc feedback interf */
 	}
-      /* cpuid 0x8000001f eax */
-      if (maxe >= 0x8000001f)
-	{
-	  cpuid (&features1, &unused, &unused, &unused, 0x8000001f);
-
-	  ftcprint (features1,  0, "sme");	/* secure memory encryption */
-	}
 
 /*	  ftcprint (features1, 11, "pti");*//* Page Table Isolation reqd with Meltdown */
 
@@ -1370,13 +1363,6 @@ format_proc_cpuinfo (void *, char *&destbuf)
 /*	  from above */
 	  ftcprint (features1,  6, "mba");	/* memory bandwidth alloc */
 	}
-      /* cpuid 0x8000001f eax */
-      if (maxe >= 0x8000001f)
-	{
-	  cpuid (&features2, &unused, &unused, &unused, 0x8000001f);
-
-	  ftcprint (features2,  1, "sev");	/* secure encrypted virt */
-	}
       /* cpuid 0x80000008 ebx */
       if (maxe >= 0x80000008)
         {
@@ -1407,6 +1393,7 @@ format_proc_cpuinfo (void *, char *&destbuf)
 
 	  ftcprint (features1,  0, "fsgsbase");	    /* rd/wr fs/gs base */
 	  ftcprint (features1,  1, "tsc_adjust");   /* TSC adjustment MSR 0x3B */
+	  ftcprint (features1,  2, "sgx");	    /* software guard extensions */
 	  ftcprint (features1,  3, "bmi1");         /* bit manip ext group 1 */
 	  ftcprint (features1,  4, "hle");          /* hardware lock elision */
 	  ftcprint (features1,  5, "avx2");         /* AVX ext instructions */
@@ -1470,6 +1457,7 @@ format_proc_cpuinfo (void *, char *&destbuf)
 	{
 	  cpuid (&features1, &unused, &unused, &unused, 0x00000007, 1);
 
+	  ftcprint (features1,  4, "avx_vnni");	    /* vex enc NN vec */
 	  ftcprint (features1,  5, "avx512_bf16");  /* vec bfloat16 short */
 	}
 
@@ -1531,6 +1519,7 @@ format_proc_cpuinfo (void *, char *&destbuf)
 	  ftcprint (features1, 13, "avic");             /* virt int control */
 	  ftcprint (features1, 15, "v_vmsave_vmload");  /* virt vmsave vmload */
 	  ftcprint (features1, 16, "vgif");             /* virt glb int flag */
+/*	  ftcprint (features1, 28, "svme_addr_chk");  *//* secure vmexit addr check */
         }
 
       /* Intel cpuid 0x00000007 ecx */
@@ -1556,6 +1545,8 @@ format_proc_cpuinfo (void *, char *&destbuf)
 	  ftcprint (features1, 25, "cldemote");         /* cldemote instr */
 	  ftcprint (features1, 27, "movdiri");          /* movdiri instr */
 	  ftcprint (features1, 28, "movdir64b");        /* movdir64b instr */
+	  ftcprint (features1, 29, "enqcmd");		/* enqcmd/s instructions*/
+	  ftcprint (features1, 30, "sgx_lc");		/* sgx launch control */
         }
 
       /* AMD MCA cpuid 0x80000007 ebx */
@@ -1579,11 +1570,33 @@ format_proc_cpuinfo (void *, char *&destbuf)
           ftcprint (features1,  8, "avx512_vp2intersect"); /* vec intcpt d/q */
           ftcprint (features1, 10, "md_clear");            /* verw clear buf */
           ftcprint (features1, 14, "serialize");           /* SERIALIZE instruction */
+          ftcprint (features1, 16, "tsxldtrk");		   /* TSX Susp Ld Addr Track */
           ftcprint (features1, 18, "pconfig");		   /* platform config */
           ftcprint (features1, 19, "arch_lbr");		   /* last branch records */
+          ftcprint (features1, 23, "avx512_fp16");	   /* avx512 fp16 */
           ftcprint (features1, 28, "flush_l1d");	   /* flush l1d cache */
           ftcprint (features1, 29, "arch_capabilities");   /* arch cap MSR */
         }
+
+      /* cpuid x8000001f eax */
+      if (is_amd && maxe >= 0x8000001f)
+	{
+	  cpuid (&features2, &unused, &unused, &unused, 0x8000001f);
+
+	  ftcprint (features2,  0, "sme");	/* secure memory encryption */
+	  ftcprint (features2,  1, "sev");	/* AMD secure encrypted virt */
+/*	  ftcprint (features2,  2, "vm_page_flush");*/	/* VM page flush MSR */
+	  ftcprint (features2,  3, "sev_es");	/* AMD SEV encrypted state */
+/*	  ftcprint (features2,  4, "sev_snp");*//* AMD SEV secure nested paging */
+/*	  ftcprint (features2,  5, "vmpl");   *//* VM permission levels support */
+/*	  ftcprint (features2, 10, "sme_coherent");   *//* SME h/w cache coherent */
+/*	  ftcprint (features2, 11, "sev_64b");*//* SEV 64 bit host guest only */
+/*	  ftcprint (features2, 12, "sev_rest_inj");   *//* SEV restricted injection */
+/*	  ftcprint (features2, 13, "sev_alt_inj");    *//* SEV alternate injection */
+/*	  ftcprint (features2, 14, "sev_es_dbg_swap");*//* SEV-ES debug state swap */
+/*	  ftcprint (features2, 15, "no_host_ibs");    *//* host IBS unsupported */
+/*	  ftcprint (features2, 16, "vte");    *//* virtual transparent encryption */
+	}
 
       print ("\n");
 

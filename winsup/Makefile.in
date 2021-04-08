@@ -40,11 +40,9 @@ INSTALL:=@INSTALL@
 INSTALL_PROGRAM:=@INSTALL_PROGRAM@
 INSTALL_DATA:=@INSTALL_DATA@
 
-SUBDIRS=@subdirs@
+SUBDIRS=cygwin cygserver doc utils testsuite
 INSTALL_SUBDIRS=${patsubst %,install_%,$(SUBDIRS)}
 CLEAN_SUBDIRS=${patsubst %,clean_%,$(SUBDIRS)}
-
-INSTALL_LICENSE:=@INSTALL_LICENSE@
 
 .PHONY: all install clean distclean all-info info install-info install-license check \
 	$(SUBDIRS) $(INSTALL_SUBDIRS) $(CLEAN_SUBDIRS)
@@ -67,7 +65,7 @@ install-license: CYGWIN_LICENSE COPYING
 	  ${INSTALL} $$i $(DESTDIR)$(prefix)/share/doc/Msys ; \
 	done
 
-install: Makefile $(INSTALL_LICENSE) $(INSTALL_SUBDIRS)
+install: Makefile install-license $(INSTALL_SUBDIRS)
 
 clean distclean: $(CLEAN_SUBDIRS)
 
@@ -90,28 +88,14 @@ $(CLEAN_SUBDIRS):
 
 .PRECIOUS: Makefile
 
-Makefile: Makefile.in $(srcdir)/configure config.status
+Makefile: Makefile.in ${patsubst %,%/Makefile.in,$(SUBDIRS)} $(srcdir)/configure config.status
 	$(SHELL) config.status
 
 config.status: configure
 	$(SHELL) config.status --recheck
 
-# The below rule is intended to run configure only when "make check" is
-# actually specified, i.e., not in a cross-compilation environment.  The
-# cygwin configuration is copied and modified to ensure that the same configuration
-# parameters are passed when the testsuite is configured as when cygwin was configured.
 check: cygwin
-	@if [ -f testsuite/config.status ]; then \
-	    cd testsuite; \
-	else \
-	    (mkdir testsuite 2>/dev/null || exit 0); \
-	    cd testsuite; \
-	    sed -e 's%winsup/cygwin\>%winsup/testsuite%g' ../cygwin/config.status > config.status; \
-	    chmod a+x config.status; \
-	    sh ./config.status --recheck; \
-	    sh ./config.status; \
-	fi; \
-	$(MAKE) check
+	$(MAKE) -C testsuite check
 
 utils: cygwin
 
@@ -119,10 +103,10 @@ cygwin:
 
 cygserver: cygwin
 
+testsuite: cygwin
+
 install_utils: cygwin
 
 install_cygwin:
 
 install_cygserver: cygwin
-
-lsaauth:

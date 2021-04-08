@@ -40,18 +40,6 @@ struct __cygwin_perfile *perfile_table;
 HANDLE NO_COPY fhandler_base_overlapped::asio_done;
 LONG NO_COPY fhandler_base_overlapped::asio_close_counter;
 
-void
-fhandler_base::reset (const fhandler_base *from)
-{
-  pc << from->pc;
-  ra.rabuf = NULL;
-  ra.ralen = 0;
-  ra.raixget = 0;
-  ra.raixput = 0;
-  ra.rabuflen = 0;
-  _refcnt = 0;
-}
-
 int
 fhandler_base::puts_readahead (const char *s, size_t len)
 {
@@ -467,7 +455,7 @@ fhandler_base::open_with_arch (int flags, mode_t mode)
     {
       if (!archetype->get_handle ())
 	{
-	  copyto (archetype);
+	  archetype->copy_from (this);
 	  archetype_usecount (1);
 	  archetype->archetype = NULL;
 	  usecount = 0;
@@ -484,7 +472,7 @@ fhandler_base::open_with_arch (int flags, mode_t mode)
 	      strcpy (name, get_name ());
 	    }
 	  fhandler_base *arch = archetype;
-	  archetype->copyto (this);
+	  copy_from (archetype);
 	  if (name)
 	    set_name (name);
 	  archetype = arch;
@@ -620,13 +608,20 @@ fhandler_base::open (int flags, mode_t mode)
   else
     create_disposition = (flags & O_CREAT) ? FILE_OPEN_IF : FILE_OPEN;
 
-  if (get_device () == FH_FS)
+  if (get_device () == FH_FS
+#ifdef __WITH_AF_UNIX
+      || get_device () == FH_UNIX
+#endif
+      )
     {
-      /* Add the reparse point flag to known repares points, otherwise we
+      /* Add the reparse point flag to known reparse points, otherwise we
 	 open the target, not the reparse point.  This would break lstat. */
       if (pc.is_known_reparse_point ())
 	options |= FILE_OPEN_REPARSE_POINT;
+    }
 
+  if (get_device () == FH_FS)
+    {
       /* O_TMPFILE files are created with delete-on-close semantics, as well
 	 as with FILE_ATTRIBUTE_TEMPORARY.  The latter speeds up file access,
 	 because the OS tries to keep the file in memory as much as possible.

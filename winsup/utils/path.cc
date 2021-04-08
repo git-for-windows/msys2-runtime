@@ -559,6 +559,7 @@ from_fstab (bool user, PWCHAR path, PWCHAR path_end)
 
 #ifndef FSTAB_ONLY
 
+#ifndef TESTSUITE
 static int
 mnt_sort (const void *a, const void *b)
 {
@@ -580,9 +581,6 @@ extern "C" WCHAR cygwin_dll_path[];
 static void
 read_mounts ()
 {
-/* If TESTSUITE is defined, bypass this whole function as a harness
-   mount table will be provided.  */
-#ifndef TESTSUITE
   HKEY setup_key;
   LONG ret;
   DWORD len;
@@ -654,8 +652,8 @@ read_mounts ()
   from_fstab (false, path, path_end);
   from_fstab (true, path, path_end);
   qsort (mount_table, max_mount_entry, sizeof (mnt_t), mnt_sort);
-#endif /* !defined(TESTSUITE) */
 }
+#endif /* !defined(TESTSUITE) */
 
 /* Return non-zero if PATH1 is a prefix of PATH2.
    Both are assumed to be of the same path style and / vs \ usage.
@@ -824,8 +822,10 @@ vcygpath (const char *cwd, const char *s, va_list v)
   size_t max_len = 0;
   mnt_t *m, *match = NULL;
 
+#ifndef TESTSUITE
   if (!max_mount_entry)
     read_mounts ();
+#endif
   char *path;
   if (s[0] == '.' && isslash (s[1]))
     s += 2;
@@ -912,8 +912,10 @@ extern "C" FILE *
 setmntent (const char *, const char *)
 {
   m = mount_table;
+#ifndef TESTSUITE
   if (!max_mount_entry)
     read_mounts ();
+#endif
   return NULL;
 }
 

@@ -133,6 +133,7 @@ tty_min::kill_pgrp (int sig)
   siginfo_t si = {0};
   si.si_signo = sig;
   si.si_code = SI_KERNEL;
+  last_sig = sig;
 
   for (unsigned i = 0; i < pids.npids; i++)
     {
@@ -331,8 +332,14 @@ fhandler_termios::line_edit (const char *rptr, size_t nread, termios& ti,
 	    goto not_a_sig;
 
 	  termios_printf ("got interrupt %d, sending signal %d", c, sig);
-	  eat_readahead (-1);
+	  if (!(ti.c_lflag & NOFLSH))
+	    {
+	      eat_readahead (-1);
+	      discard_input ();
+	    }
+	  release_input_mutex_if_necessary ();
 	  tc ()->kill_pgrp (sig);
+	  acquire_input_mutex_if_necessary (INFINITE);
 	  ti.c_lflag &= ~FLUSHO;
 	  sawsig = true;
 	  goto restart_output;

@@ -96,9 +96,9 @@ fhandler_pipe::open (int flags, mode_t mode)
 	  if ((rwflags == O_RDONLY && !(cfd->get_access () & GENERIC_READ))
 	      || (rwflags == O_WRONLY && !(cfd->get_access () & GENERIC_WRITE)))
 	    continue;
-	  cfd->copyto (this);
+	  copy_from (cfd);
 	  set_handle (NULL);
-	  pc.reset_conv_handle ();
+	  pc.close_conv_handle ();
 	  if (!cfd->dup (this, flags))
 	    return 1;
 	  return 0;

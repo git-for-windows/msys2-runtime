@@ -22,8 +22,10 @@ int get_word (HANDLE, int);
 int get_dword (HANDLE, int);
 bool from_fstab_line (mnt_t *m, char *line, bool user);
 
+#ifndef TESTSUITE
 extern mnt_t mount_table[255];
 extern int max_mount_entry;
+#endif
 
 #ifndef SYMLINK_MAX
 #define SYMLINK_MAX 4095  /* PATH_MAX - 1 */

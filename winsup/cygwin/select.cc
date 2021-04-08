@@ -710,6 +710,11 @@ peek_pipe (select_record *s, bool from_select)
     }
 
 out:
+  if (fh->get_major () == DEV_PTYM_MAJOR)
+    {
+      fhandler_pty_master *fhm = (fhandler_pty_master *) fh;
+      fhm->set_mask_flusho (s->read_ready);
+    }
   h = fh->get_output_handle_cyg ();
   if (s->write_selected && dev != FH_PIPER)
     {
@@ -783,8 +788,8 @@ pipe_cleanup (select_record *, select_stuff *stuff)
       pi->stop_thread = true;
       SetEvent (pi->bye);
       pi->thread->detach ();
+      CloseHandle (pi->bye);
     }
-  CloseHandle (pi->bye);
   delete pi;
   stuff->device_specific_pipe = NULL;
 }
@@ -978,8 +983,8 @@ fifo_cleanup (select_record *, select_stuff *stuff)
       pi->stop_thread = true;
       SetEvent (pi->bye);
       pi->thread->detach ();
+      CloseHandle (pi->bye);
     }
-  CloseHandle (pi->bye);
   delete pi;
   stuff->device_specific_fifo = NULL;
 }
@@ -1032,6 +1037,22 @@ fhandler_fifo::select_except (select_stuff *ss)
   return s;
 }
 
+extern HANDLE attach_mutex; /* Defined in fhandler_console.cc */
+
+static inline void
+acquire_attach_mutex (DWORD t)
+{
+  if (attach_mutex)
+    WaitForSingleObject (attach_mutex, t);
+}
+
+static inline void
+release_attach_mutex ()
+{
+  if (attach_mutex)
+    ReleaseMutex (attach_mutex);
+}
+
 static int
 peek_console (select_record *me, bool)
 {
@@ -1057,10 +1078,14 @@ peek_console (select_record *me, bool)
   HANDLE h;
   set_handle_or_return_if_not_open (h, me);
 
+  acquire_attach_mutex (INFINITE);
   while (!fh->input_ready && !fh->get_cons_readahead_valid ())
     {
       if (fh->bg_check (SIGTTIN, true) <= bg_eof)
-	return me->read_ready = true;
+	{
+	  release_attach_mutex ();
+	  return me->read_ready = true;
+	}
       else if (!PeekConsoleInputW (h, &irec, 1, &events_read) || !events_read)
 	break;
       fh->acquire_input_mutex (INFINITE);
@@ -1070,10 +1095,12 @@ peek_console (select_record *me, bool)
 	{
 	  set_sig_errno (EINTR);
 	  fh->release_input_mutex ();
+	  release_attach_mutex ();
 	  return -1;
 	}
       fh->release_input_mutex ();
     }
+  release_attach_mutex ();
   if (fh->input_ready || fh->get_cons_readahead_valid ())
     return me->read_ready = true;
 
@@ -1087,16 +1114,59 @@ verify_console (select_record *me, fd_set *rfds, fd_set *wfds,
   return peek_console (me, true);
 }
 
-static void console_cleanup (select_record *, select_stuff *);
+static int console_startup (select_record *me, select_stuff *stuff);
+
+static DWORD WINAPI
+thread_console (void *arg)
+{
+  select_console_info *ci = (select_console_info *) arg;
+  DWORD sleep_time = 0;
+  bool looping = true;
+
+  while (looping)
+    {
+      for (select_record *s = ci->start; (s = s->next); )
+	if (s->startup == console_startup)
+	  {
+	    if (peek_console (s, true))
+	      looping = false;
+	    if (ci->stop_thread)
+	      {
+		select_printf ("stopping");
+		looping = false;
+		break;
+	      }
+	  }
+      if (!looping)
+	break;
+      cygwait (ci->bye, sleep_time >> 3);
+      if (sleep_time < 80)
+	++sleep_time;
+      if (ci->stop_thread)
+	break;
+    }
+  return 0;
+}
 
 static int
 console_startup (select_record *me, select_stuff *stuff)
 {
   fhandler_console *fh = (fhandler_console *) me->fh;
-  if (wincap.has_con_24bit_colors ())
+  fhandler_console::set_input_mode (tty::cygwin, &((tty *)fh->tc ())->ti,
+				    fh->get_handle_set ());
+
+  select_console_info *ci = stuff->device_specific_console;
+  if (ci->start)
+    me->h = *(stuff->device_specific_console)->thread;
+  else
     {
-      fh->request_xterm_mode_input (true);
-      me->cleanup = console_cleanup;
+      ci->start = &stuff->start;
+      ci->stop_thread = false;
+      ci->bye = CreateEvent (&sec_none_nih, TRUE, FALSE, NULL);
+      ci->thread = new cygthread (thread_console, ci, "conssel");
+      me->h = *ci->thread;
+      if (!me->h)
+	return 0;
     }
   return 1;
 }
@@ -1104,14 +1174,27 @@ console_startup (select_record *me, select_stuff *stuff)
 static void
 console_cleanup (select_record *me, select_stuff *stuff)
 {
-  fhandler_console *fh = (fhandler_console *) me->fh;
-  if (wincap.has_con_24bit_colors ())
-    fh->request_xterm_mode_input (false);
+  select_console_info *ci = stuff->device_specific_console;
+  if (!ci)
+    return;
+  if (ci->thread)
+    {
+      ci->stop_thread = true;
+      SetEvent (ci->bye);
+      ci->thread->detach ();
+      CloseHandle (ci->bye);
+    }
+  delete ci;
+  stuff->device_specific_console = NULL;
 }
 
 select_record *
 fhandler_console::select_read (select_stuff *ss)
 {
+  if (!ss->device_specific_console
+      && (ss->device_specific_console = new select_console_info) == NULL)
+    return NULL;
+
   select_record *s = ss->start.next;
   if (!s->startup)
     {
@@ -1121,9 +1204,9 @@ fhandler_console::select_read (select_stuff *ss)
     }
 
   s->peek = peek_console;
-  s->h = get_handle ();
   s->read_selected = true;
   s->read_ready = input_ready || get_cons_readahead_valid ();
+  s->cleanup = console_cleanup;
   return s;
 }
 
@@ -1215,8 +1298,7 @@ verify_tty_slave (select_record *me, fd_set *readfds, fd_set *writefds,
 	   fd_set *exceptfds)
 {
   fhandler_pty_slave *ptys = (fhandler_pty_slave *) me->fh;
-  if (me->read_selected && !ptys->to_be_read_from_pcon () &&
-      IsEventSignalled (ptys->input_available_event))
+  if (me->read_selected && IsEventSignalled (ptys->input_available_event))
     me->read_ready = true;
   return set_bits (me, readfds, writefds, exceptfds);
 }
@@ -1229,8 +1311,6 @@ peek_pty_slave (select_record *s, bool from_select)
   fhandler_pty_slave *ptys = (fhandler_pty_slave *) fh;
 
   ptys->reset_switch_to_pcon ();
-  if (ptys->to_be_read_from_pcon ())
-    ptys->update_pcon_input_state (true);
 
   if (s->read_selected)
     {
@@ -1313,7 +1393,7 @@ pty_slave_startup (select_record *me, select_stuff *stuff)
   fhandler_base *fh = (fhandler_base *) me->fh;
   fhandler_pty_slave *ptys = (fhandler_pty_slave *) fh;
   if (me->read_selected)
-    ptys->mask_switch_to_pcon_in (true);
+    ptys->mask_switch_to_pcon_in (true, true);
 
   select_pipe_info *pi = stuff->device_specific_ptys;
   if (pi->start)
@@ -1336,19 +1416,18 @@ pty_slave_cleanup (select_record *me, select_stuff *stuff)
 {
   fhandler_base *fh = (fhandler_base *) me->fh;
   fhandler_pty_slave *ptys = (fhandler_pty_slave *) fh;
-  if (me->read_selected)
-    ptys->mask_switch_to_pcon_in (false);
-
   select_pipe_info *pi = (select_pipe_info *) stuff->device_specific_ptys;
   if (!pi)
     return;
+  if (me->read_selected && pi->start)
+    ptys->mask_switch_to_pcon_in (false, false);
   if (pi->thread)
     {
       pi->stop_thread = true;
       SetEvent (pi->bye);
       pi->thread->detach ();
+      CloseHandle (pi->bye);
     }
-  CloseHandle (pi->bye);
   delete pi;
   stuff->device_specific_ptys = NULL;
 }
