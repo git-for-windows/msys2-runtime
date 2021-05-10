@@ -232,6 +232,123 @@ inject_remote_thread_into_process(HANDLE process, LPTHREAD_START_ROUTINE address
   return res;
 }
 
+#define PROCESS_BASIC_INFORMATION_SIZE_32 0x18
+#define PEB_OFFSET_32 0x4
+#define PARAMS_OFFSET_32 0x10
+#define CONSOLE_FLAGS_OFFSET_32 0x14
+
+#define PROCESS_BASIC_INFORMATION_SIZE_64 0x30
+#define PEB_OFFSET_64 0x8
+#define PARAMS_OFFSET_64 0x20
+#define CONSOLE_FLAGS_OFFSET_64 0x18
+
+/**
+ * Adjust the ConsoleFlags to allow the process to accept Ctrl+C.
+ *
+ * The handle must be opened with PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_WRITE.
+ *
+ * Returns 1 if the ConsoleFlags were cleared, 0 if they had already been cleared, and -1
+ * on unspecified error.
+ */
+static int
+adjust_console_flag(HANDLE process)
+{
+  union
+    {
+      char chars[PROCESS_BASIC_INFORMATION_SIZE_64];
+      ULONG32 ulong32;
+      ULONG64 ulong64;
+    } u;
+  int res = 0;
+  char flags;
+
+#ifdef __LP64__
+  /* Are we looking at a 32-bit process from a 64-bit one? */
+  if (!NtQueryInformationProcess (process, ProcessWow64Information, &u.chars, 8, NULL) && u.ulong64)
+    {
+      SIZE_T size;
+      if (!ReadProcessMemory (process, (char *)u.ulong64 + PARAMS_OFFSET_32, u.chars, 4, &size) || size != 4)
+	return -1;
+      if (!ReadProcessMemory (process, (char *)(ULONG64)u.ulong32 + CONSOLE_FLAGS_OFFSET_32, &flags, 1, &size) || size != 1)
+	return -1;
+      if (flags == 1)
+        {
+	  res = 1;
+	  flags = 0;
+	  if (!WriteProcessMemory (process, (char *)(ULONG64)u.ulong32 + CONSOLE_FLAGS_OFFSET_32, &flags, 1, &size) || size != 1)
+	    return -1;
+	}
+    }
+
+  if (!NtQueryInformationProcess (process, ProcessBasicInformation, u.chars, PROCESS_BASIC_INFORMATION_SIZE_64, NULL))
+   {
+     SIZE_T size;
+     if (!ReadProcessMemory (process, (char *)*(ULONG64 *)(u.chars + PEB_OFFSET_64) + PARAMS_OFFSET_64, u.chars, 8, &size) || size != 8)
+       return -1;
+     if (!ReadProcessMemory (process, (char *)u.ulong64 + CONSOLE_FLAGS_OFFSET_64, &flags, 1, &size) || size != 1)
+       return -1;
+     if (flags == 1)
+       {
+	 res = 1;
+	 flags = 0;
+	 if (!WriteProcessMemory (process, (char *)u.ulong64 + CONSOLE_FLAGS_OFFSET_64, &flags, 1, &size) || size != 1)
+	   return -1;
+       }
+   }
+#else
+  if (!NtQueryInformationProcess(process, ProcessBasicInformation, u.chars, PROCESS_BASIC_INFORMATION_SIZE_32, NULL) && (char *)*(ULONG32 *)(u.chars + PEB_OFFSET_32))
+    {
+      SIZE_T size;
+      if (!ReadProcessMemory (process, (char *)*(ULONG32 *)(u.chars + PEB_OFFSET_32) + PARAMS_OFFSET_32, u.chars, 8, &size) || size != 8)
+	return -1;
+      if (!ReadProcessMemory (process, (char *)u.ulong32 + CONSOLE_FLAGS_OFFSET_32, &flags, 1, &size) || size != 1)
+	return -1;
+      if (flags == 1)
+        {
+	  res = 1;
+	  flags = 0;
+	  if (!WriteProcessMemory (process, (char *)u.ulong32 + CONSOLE_FLAGS_OFFSET_32, &flags, 1, &size) || size != 1)
+	    return -1;
+	}
+    }
+
+  /* So maybe this is a 32-bit process looking at a 64-bit one? */
+  {
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    static NTSTATUS(NTAPI *NtWow64ReadVirtualMemory64)(HANDLE process, ULONG64 address, PVOID buffer, ULONG64 size, PULONG64 count);
+    static NTSTATUS(NTAPI *NtWow64WriteVirtualMemory64)(HANDLE process, ULONG64 address, PVOID buffer, ULONG64 size, PULONG64 count);
+    static NTSTATUS(NTAPI *NtWow64QueryInformationProcess64)(HANDLE process, PROCESSINFOCLASS info_class, PVOID buffer, ULONG size, PULONG count);
+    static int initialized;
+    ULONG64 size;
+
+    if (!initialized)
+      {
+	initialized = 1;
+	NtWow64ReadVirtualMemory64 = (typeof (NtWow64ReadVirtualMemory64))GetProcAddress (ntdll, "NtWow64ReadVirtualMemory64");
+	NtWow64WriteVirtualMemory64 = (typeof (NtWow64WriteVirtualMemory64))GetProcAddress (ntdll, "NtWow64WriteVirtualMemory64");
+	NtWow64QueryInformationProcess64 = (typeof (NtWow64QueryInformationProcess64))GetProcAddress (ntdll, "NtWow64QueryInformationProcess64");
+      }
+
+    if (NtWow64ReadVirtualMemory64 && NtWow64WriteVirtualMemory64 && NtWow64QueryInformationProcess64)
+      if (!NtWow64QueryInformationProcess64 (process, ProcessBasicInformation, u.chars, PROCESS_BASIC_INFORMATION_SIZE_64, NULL))
+        {
+	  if (NtWow64ReadVirtualMemory64 (process, *(ULONG64 *)(u.chars + PEB_OFFSET_64) + PARAMS_OFFSET_64, u.chars, 8, &size) || size != 8)
+	    return -1;
+	  if (NtWow64ReadVirtualMemory64(process, u.ulong64 + CONSOLE_FLAGS_OFFSET_64, &flags, 1, &size) || size != 1)
+	    return -1;
+	}
+      if (flags == 1)
+        {
+	  res = 1;
+	  flags = 0;
+	  if (NtWow64WriteVirtualMemory64(process, u.ulong64 + CONSOLE_FLAGS_OFFSET_64, &flags, 1, &size) || size != 1)
+	    return -1;
+	}
+  }
+#endif
+  return res;
+}
+
 /**
  * Terminates the process corresponding to the process ID
  *
@@ -245,6 +362,7 @@ exit_one_process(HANDLE process, int exit_code)
   LPTHREAD_START_ROUTINE address = NULL;
   int signo = exit_code & 0x7f;
 
+TODO: use IsProcessCritical() if available (Windows 8.1 and later) to skip this
   switch (signo)
     {
       case SIGINT:
@@ -253,8 +371,14 @@ exit_one_process(HANDLE process, int exit_code)
 	if (address &&
 	    !inject_remote_thread_into_process(process, address,
 					       signo == SIGINT ?
-					       CTRL_C_EVENT : CTRL_BREAK_EVENT))
-	  return 0;
+					       CTRL_C_EVENT :
+					       CTRL_BREAK_EVENT)) {
+	  DWORD code;
+	  if (signo == SIGINT && !GetExitCodeProcess (process, &code) ||
+	      code == STILL_ACTIVE && adjust_console_flag(process) > 0 &&
+	      !inject_remote_thread_into_process(process, address, CTRL_C_EVENT))
+	    return 0;
+	}
 	/* fall-through */
       case SIGTERM:
 	address = get_exit_process_address_for_process(process);
