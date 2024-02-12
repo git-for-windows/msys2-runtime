@@ -38,6 +38,86 @@ jobs:
           name: install
           path: _dest/
 
+  minimal-sdk-artifact:
+    runs-on: windows-latest
+    needs: [build]
+    outputs:
+      git-artifacts-extract-location: ${{ steps.git-artifacts-extract-location.outputs.result }}
+    env:
+      G4W_SDK_REPO: git-for-windows/git-sdk-64
+    steps:
+      - name: get latest successful ci-artifacts run
+        # Cannot just grab from https://github.com/git-for-windows/git-sdk-64/releases/tag/ci-artifacts
+        # because we also need the git-artifacts
+        id: ci-artifacts-run-id
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const [ owner, repo ] = process.env.G4W_SDK_REPO.split('/')
+            const info = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 938271, // ci-artifacts.yml
+              status: 'success',
+              per_page: 1
+            })
+            return info.data.workflow_runs[0].id
+      - name: get the ci-artifacts build's artifacts
+        shell: bash
+        run: |
+          run_id=${{ steps.ci-artifacts-run-id.outputs.result }} &&
+
+          curl -H "Authorization: token ${{secrets.GITHUB_TOKEN}}" \
+            -L https://api.github.com/repos/$G4W_SDK_REPO/actions/runs/$run_id/artifacts |
+          jq -r '.artifacts[] | [.name, .archive_download_url] | @tsv' |
+          tr -d '\r' |
+          while read name url
+          do
+            echo "$name"
+            curl -H "Authorization: token ${{secrets.GITHUB_TOKEN}}" \
+              -#sLo /tmp/"$name".zip "$url" &&
+            unzip -qo /tmp/"$name".zip ||
+            exit $?
+          done
+          ls -la
+      - uses: actions/download-artifact@v4
+        with:
+          name: install
+          path: install
+      - name: overwrite MSYS2 runtime with the just-built msys2-runtime
+        shell: bash
+        run: |
+          set -x &&
+          mkdir minimal-sdk &&
+          cd minimal-sdk &&
+          tar xzf ../git-sdk-x86_64-minimal.tar.gz &&
+          tar -C ../install -cf - . | tar xf - &&
+          tar cvf - * .[0-9A-Za-z]* | gzip -1 >../git-sdk-x86_64-minimal.tar.gz
+      - name: upload minimal-sdk artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimal-sdk
+          path: git-sdk-x86_64-minimal.tar.gz
+      - name: run `uname`
+        run: minimal-sdk\usr\bin\uname.exe -a
+      - name: determine where `git-artifacts` want to be extracted
+        id: git-artifacts-extract-location
+        shell: bash
+        run: |
+          echo "result=$(tar Oxf git-artifacts.tar.gz git/bin-wrappers/git |
+            sed -n 's|^GIT_EXEC_PATH='\''\(.*\)/git'\''$|\1|p')" >>$GITHUB_OUTPUT
+      - name: upload git artifacts for testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-artifacts
+          path: git-artifacts.tar.gz
+
+  test-minimal-sdk:
+    needs: [minimal-sdk-artifact]
+    uses: git-for-windows/git-sdk-64/.github/workflows/test-ci-artifacts.yml@main
+    with:
+      git-artifacts-extract-location: ${{ needs.minimal-sdk-artifact.outputs.git-artifacts-extract-location }}
+
   generate-msys2-tests-matrix:
     runs-on: ubuntu-latest
     outputs:
