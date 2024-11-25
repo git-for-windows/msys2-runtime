@@ -1262,14 +1262,13 @@ proc_waiter (void *arg)
 
   for (;;)
     {
-      DWORD nb, err;
+      DWORD nb;
       char buf = '\0';
 
       if (!ReadFile (vchild.rd_proc_pipe, &buf, 1, &nb, NULL)
-	  && (err = GetLastError ()) != ERROR_BROKEN_PIPE)
+	  && GetLastError () != ERROR_BROKEN_PIPE)
 	{
-	  if (err != ERROR_OPERATION_ABORTED)
-	    system_printf ("error on read of child wait pipe %p, %E", vchild.rd_proc_pipe);
+	  system_printf ("error on read of child wait pipe %p, %E", vchild.rd_proc_pipe);
 	  break;
 	}
 
