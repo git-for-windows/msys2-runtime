@@ -340,14 +340,14 @@ try_to_bin (path_conv &pc, HANDLE &fh, ACCESS_MASK access, ULONG flags)
   else
     {
       /* Create unique filename.  Start with a dot, followed by "msys"
-	 transposed into the Unicode low surrogate area (U+dc00) on file
-	 systems supporting Unicode (except Samba), followed by the inode
-	 number in hex, followed by a path hash in hex.  The combination
-	 allows to remove multiple hardlinks to the same file. */
+	 transposed to the Unicode private use area in the U+f700 area
+	 on file systems supporting Unicode (except Samba), followed by
+	 the inode number in hex, followed by a path hash in hex.  The
+	 combination allows to remove multiple hardlinks to the same file. */
       RtlAppendUnicodeToString (&recycler,
 				(pc.fs_flags () & FILE_UNICODE_ON_DISK
 				 && !pc.fs_is_samba ())
-				? L".\xdc6d\xdc73\xdc79\xdc73" : L".msys");
+				? L".\xf76d\xf773\xf779\xf773" : L".msys");
       pfii = (PFILE_INTERNAL_INFORMATION) infobuf;
       status = NtQueryInformationFile (fh, &io, pfii, sizeof *pfii,
 				       FileInternalInformation);
@@ -617,9 +617,10 @@ check_dir_not_empty (HANDLE dir, path_conv &pc)
   IO_STATUS_BLOCK io;
   const ULONG bufsiz = 3 * sizeof (FILE_NAMES_INFORMATION)
 		       + 3 * NAME_MAX * sizeof (WCHAR);
-  PFILE_NAMES_INFORMATION pfni = (PFILE_NAMES_INFORMATION)
-				 alloca (bufsiz);
-  NTSTATUS status = NtQueryDirectoryFile (dir, NULL, NULL, 0, &io, pfni,
+  PFILE_NAMES_INFORMATION pfni_buf = (PFILE_NAMES_INFORMATION)
+				     alloca (bufsiz);
+  PFILE_NAMES_INFORMATION pfni;
+  NTSTATUS status = NtQueryDirectoryFile (dir, NULL, NULL, 0, &io, pfni_buf,
 					  bufsiz, FileNamesInformation,
 					  FALSE, NULL, TRUE);
   if (!NT_SUCCESS (status))
@@ -631,6 +632,7 @@ check_dir_not_empty (HANDLE dir, path_conv &pc)
   int cnt = 1;
   do
     {
+      pfni = pfni_buf;
       while (pfni->NextEntryOffset)
 	{
 	  if (++cnt > 2)
@@ -677,7 +679,7 @@ check_dir_not_empty (HANDLE dir, path_conv &pc)
 	  pfni = (PFILE_NAMES_INFORMATION) ((caddr_t) pfni + pfni->NextEntryOffset);
 	}
     }
-  while (NT_SUCCESS (NtQueryDirectoryFile (dir, NULL, NULL, 0, &io, pfni,
+  while (NT_SUCCESS (NtQueryDirectoryFile (dir, NULL, NULL, 0, &io, pfni_buf,
 					   bufsiz, FileNamesInformation,
 					   FALSE, NULL, FALSE)));
   return STATUS_SUCCESS;

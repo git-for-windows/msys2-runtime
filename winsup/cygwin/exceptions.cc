@@ -1420,7 +1420,7 @@ api_fatal_debug ()
 
 /* Attempt to carefully handle SIGCONT when we are stopped. */
 void
-_cygtls::handle_SIGCONT ()
+_cygtls::handle_SIGCONT (threadlist_t * &tl_entry)
 {
   if (NOTSTATE (myself, PID_STOPPED))
     return;
@@ -1435,7 +1435,11 @@ _cygtls::handle_SIGCONT ()
   while (1)
     if (sig)		/* Assume that it's ok to just test sig outside of a
 			   lock since setup_handler does it this way.  */
-      yield ();		/* Attempt to schedule another thread.  */
+      {
+	cygheap->unlock_tls (tl_entry);
+	yield ();	/* Attempt to schedule another thread.  */
+	tl_entry = cygheap->find_tls (_main_tls);
+      }
     else if (sigsent)
       break;		/* SIGCONT has been recognized by other thread */
     else
@@ -1445,10 +1449,10 @@ _cygtls::handle_SIGCONT ()
 	sigsent = true;
       }
   /* Clear pending stop signals */
-  sig_clear (SIGSTOP);
-  sig_clear (SIGTSTP);
-  sig_clear (SIGTTIN);
-  sig_clear (SIGTTOU);
+  sig_clear (SIGSTOP, false);
+  sig_clear (SIGTSTP, false);
+  sig_clear (SIGTTIN, false);
+  sig_clear (SIGTTOU, false);
 }
 
 int
@@ -1477,7 +1481,7 @@ sigpacket::process ()
   if (si.si_signo == SIGCONT)
     {
       tl_entry = cygheap->find_tls (_main_tls);
-      _main_tls->handle_SIGCONT ();
+      _main_tls->handle_SIGCONT (tl_entry);
       cygheap->unlock_tls (tl_entry);
     }
 
@@ -1528,11 +1532,14 @@ sigpacket::process ()
   if ((HANDLE) *tls)
     tls->signal_debugger (si);
 
-  if (issig_wait)
+  tls->lock ();
+  if (issig_wait && tls->sigwait_mask != 0)
     {
       tls->sigwait_mask = 0;
+      tls->unlock ();
       goto dosig;
     }
+  tls->unlock ();
 
   if (handler == SIG_IGN)
     {
@@ -1546,14 +1553,14 @@ sigpacket::process ()
     goto exit_sig;
   if (si.si_signo == SIGSTOP)
     {
-      sig_clear (SIGCONT);
+      sig_clear (SIGCONT, false);
       goto stop;
     }
 
   /* Clear pending SIGCONT on stop signals */
   if (si.si_signo == SIGTSTP || si.si_signo == SIGTTIN
       || si.si_signo == SIGTTOU)
-    sig_clear (SIGCONT);
+    sig_clear (SIGCONT, false);
 
   if (handler == (void *) SIG_DFL)
     {
