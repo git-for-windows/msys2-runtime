@@ -24,7 +24,7 @@ jobs:
           # resulting in errors due to -Werror. Disable them for now.
           export CXXFLAGS="-Wno-error=stringop-truncation -Wno-error=array-bounds -Wno-error=overloaded-virtual -Wno-narrowing -Wno-use-after-free -Wno-error=maybe-uninitialized"
           (cd winsup && ./autogen.sh)
-          ./configure --disable-dependency-tracking
+          ./configure --disable-dependency-tracking --with-msys2-runtime-commit=$GITHUB_SHA
           make -j8
 
       - name: Install
