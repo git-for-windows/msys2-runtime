@@ -74,7 +74,7 @@ yes|auto)
         MSYS2_RUNTIME_COMMIT_SHORT="$(expr "$MSYS2_RUNTIME_COMMIT" : '\(.\{,8\}\)')"
         MSYS2_RUNTIME_COMMIT_HEX="0x${MSYS2_RUNTIME_COMMIT_SHORT}ul"
     else
-        AC_MSG_WARN([Could not determine msys2-runtime commit"])
+        AC_MSG_WARN([Could not determine msys2-runtime commit])
         MSYS2_RUNTIME_COMMIT=
         MSYS2_RUNTIME_COMMIT_SHORT=
         MSYS2_RUNTIME_COMMIT_HEX=0
