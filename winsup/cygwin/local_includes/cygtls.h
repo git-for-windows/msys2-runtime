@@ -135,6 +135,7 @@ struct _local_storage
 
   /* thread.cc */
   HANDLE cw_timer;
+  bool cw_timer_inuse;
 
   tls_pathbuf pathbufs;
   char ttybuf[32];
@@ -180,7 +181,7 @@ public: /* Do NOT remove this public: line, it's a marker for gentls_offsets. */
   siginfo_t *sigwait_info;
   HANDLE signal_arrived;
   bool will_wait_for_signal;
-#if 0
+#if 1
   long __align;			/* Needed to align context to 16 byte. */
 #endif
   /* context MUST be aligned to 16 byte, otherwise RtlCaptureContext fails.
@@ -194,7 +195,7 @@ public: /* Do NOT remove this public: line, it's a marker for gentls_offsets. */
   class cygthread *_ctinfo;
   class san *andreas;
   waitq wq;
-  int sig;
+  volatile int sig;
   unsigned incyg;
   volatile unsigned spinning;
   volatile unsigned stacklock;
@@ -275,7 +276,7 @@ public: /* Do NOT remove this public: line, it's a marker for gentls_offsets. */
   {
     will_wait_for_signal = false;
   }
-  void handle_SIGCONT (threadlist_t * &);
+  void handle_SIGCONT ();
   static void cleanup_early(struct _reent *);
 private:
   void call2 (DWORD (*) (void *, void *), void *, void *);

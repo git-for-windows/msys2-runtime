@@ -742,6 +742,9 @@ sig_send (_pinfo *p, siginfo_t& si, _cygtls *tls)
       memcpy (p, si._si_commune._si_str, n); p += n;
     }
 
+  unsigned cw_mask;
+  cw_mask = pack.si.si_signo == __SIGFLUSHFAST ? 0 : cw_sig_restart;
+
   DWORD nb;
   BOOL res;
   /* Try multiple times to send if packsize != nb since that probably
@@ -751,14 +754,9 @@ sig_send (_pinfo *p, siginfo_t& si, _cygtls *tls)
       res = WriteFile (sendsig, leader, packsize, &nb, NULL);
       if (!res || packsize == nb)
 	break;
-      if (cygwait (NULL, 10, cw_sig_eintr) == WAIT_SIGNALED
-	  && pack.si.si_signo != __SIGFLUSHFAST)
-	_my_tls.call_signal_handler ();
+      cygwait (NULL, 10, cw_mask);
       res = 0;
     }
-  /* Re-assert signal_arrived which has been cleared in cygwait(). */
-  if (_my_tls.sig)
-    _my_tls.set_signal_arrived ();
 
   if (!res)
     {
@@ -789,16 +787,7 @@ sig_send (_pinfo *p, siginfo_t& si, _cygtls *tls)
   if (wait_for_completion)
     {
       sigproc_printf ("Waiting for pack.wakeup %p", pack.wakeup);
-      do
-	{
-	  rc = cygwait (pack.wakeup, WSSC, cw_sig_eintr);
-	  if (rc == WAIT_SIGNALED && pack.si.si_signo != __SIGFLUSHFAST)
-	    _my_tls.call_signal_handler ();
-	}
-      while (rc != WAIT_OBJECT_0 && rc != WAIT_TIMEOUT);
-      /* Re-assert signal_arrived which has been cleared in cygwait(). */
-      if (_my_tls.sig)
-	_my_tls.set_signal_arrived ();
+      rc = cygwait (pack.wakeup, WSSC, cw_mask);
       ForceCloseHandle (pack.wakeup);
     }
   else
