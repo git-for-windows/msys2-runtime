@@ -34,3 +34,184 @@ jobs:
         with:
           name: install
           path: _dest/
+  minimal-sdk-artifact:
+    runs-on: windows-latest
+    needs: [build]
+    outputs:
+      git-artifacts-extract-location: ${{ steps.git-artifacts-extract-location.outputs.result }}
+    env:
+      G4W_SDK_REPO: git-for-windows/git-sdk-64
+    steps:
+      - name: get latest successful ci-artifacts run
+        # Cannot just grab from https://github.com/git-for-windows/git-sdk-64/releases/tag/ci-artifacts
+        # because we also need the git-artifacts
+        id: ci-artifacts-run-id
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const [ owner, repo ] = process.env.G4W_SDK_REPO.split('/')
+            const info = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 938271, // ci-artifacts.yml
+              status: 'success',
+              per_page: 1
+            })
+            return info.data.workflow_runs[0].id
+      - name: get the ci-artifacts build's artifacts
+        shell: bash
+        run: |
+          run_id=${{ steps.ci-artifacts-run-id.outputs.result }} &&
+
+          curl -H "Authorization: token ${{secrets.GITHUB_TOKEN}}" \
+            -L https://api.github.com/repos/$G4W_SDK_REPO/actions/runs/$run_id/artifacts |
+          jq -r '.artifacts[] | [.name, .archive_download_url] | @tsv' |
+          tr -d '\r' |
+          while read name url
+          do
+            echo "$name"
+            curl -H "Authorization: token ${{secrets.GITHUB_TOKEN}}" \
+              -#sLo /tmp/"$name".zip "$url" &&
+            unzip -qo /tmp/"$name".zip ||
+            exit $?
+          done
+          ls -la
+      - uses: actions/download-artifact@v4
+        with:
+          name: install
+          path: install
+      - name: overwrite MSYS2 runtime with the just-built msys2-runtime
+        shell: bash
+        run: |
+          set -x &&
+          mkdir minimal-sdk &&
+          cd minimal-sdk &&
+          tar xzf ../git-sdk-x86_64-minimal.tar.gz &&
+          tar -C ../install -cf - . | tar xf - &&
+          tar cvf - * .[0-9A-Za-z]* | gzip -1 >../git-sdk-x86_64-minimal.tar.gz
+      - name: upload minimal-sdk artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimal-sdk
+          path: git-sdk-x86_64-minimal.tar.gz
+      - name: run `uname`
+        run: minimal-sdk\usr\bin\uname.exe -a
+      - name: determine where `git-artifacts` want to be extracted
+        id: git-artifacts-extract-location
+        shell: bash
+        run: |
+          echo "result=$(tar Oxf git-artifacts.tar.gz git/bin-wrappers/git |
+            sed -n 's|^GIT_EXEC_PATH='\''\(.*\)/git'\''$|\1|p')" >>$GITHUB_OUTPUT
+      - name: upload git artifacts for testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-artifacts
+          path: git-artifacts.tar.gz
+  test-minimal-sdk:
+    runs-on: windows-latest
+    needs: [minimal-sdk-artifact]
+    strategy:
+      matrix:
+        # 0..16 permuted according to the matrix builds' timings as of git/git@9fadedd63
+        nr: [9, 6, 13, 0, 8, 5, 2, 16, 15, 11, 10, 1, 7, 3, 14, 12, 4]
+      fail-fast: false
+    steps:
+      - name: download minimal-sdk artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: minimal-sdk
+          path: ${{github.workspace}}
+      - name: uncompress minimal-sdk
+        shell: bash
+        run: |
+          mkdir -p minimal-sdk &&
+          tar -C minimal-sdk -xzf git-sdk-x86_64-minimal.tar.gz &&
+          cygpath -aw minimal-sdk/usr/bin >>$GITHUB_PATH
+      - name: download git artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: git-artifacts
+          path: ${{github.workspace}}
+      - name: uncompress git-artifacts
+        shell: bash
+        env:
+          GIT_ARTIFACTS_EXTRACT_LOCATION: ${{ needs.minimal-sdk-artifact.outputs.git-artifacts-extract-location }}
+        run: |
+          mkdir -p "$GIT_ARTIFACTS_EXTRACT_LOCATION" &&
+          tar -C "$GIT_ARTIFACTS_EXTRACT_LOCATION" -xzf git-artifacts.tar.gz
+      - name: test
+        shell: bash
+        run: |
+          set -x
+          . /etc/profile
+          test "$(cygpath -aw /)" = "${{github.workspace}}\minimal-sdk" || exit 1
+          cd "$GIT_ARTIFACTS_EXTRACT_LOCATION"/git/t &&
+          make T="$(ls -S t[0-9]*.sh | awk '!((NR+${{matrix.nr}})%17)' | tr '\n' \ )" prove || {
+            for d in trash*
+            do
+              t=${d#trash directory.}
+              echo ===========================
+              echo Failed: $t.sh
+              cat test-results/$t.out
+            done
+            exit 1
+          }
+        env:
+          GIT_ARTIFACTS_EXTRACT_LOCATION: ${{ needs.minimal-sdk-artifact.outputs.git-artifacts-extract-location }}
+          PATH: ${{github.workspace}}\minimal-sdk\mingw64\bin;${{github.workspace}}\minimal-sdk\usr\bin;${{github.workspace}}\minimal-sdk\usr\bin\core_perl;C:\Windows\system32;C:\Windows;C:\Windows\system32\wbem
+          GIT_TEST_OPTS: --verbose-log -x --no-chain-lint
+          GIT_PROVE_OPTS: --timer --jobs 8
+          NO_SVN_TESTS: 1
+  assorted-validations:
+    runs-on: windows-latest
+    needs: [minimal-sdk-artifact]
+    steps:
+      - name: download minimal-sdk artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: minimal-sdk
+          path: ${{github.workspace}}
+      - name: uncompress minimal-sdk
+        shell: bash
+        run: |
+          mkdir -p minimal-sdk &&
+          tar -C minimal-sdk -xzf git-sdk-x86_64-minimal.tar.gz &&
+          cygpath -aw minimal-sdk/usr/bin >>$GITHUB_PATH
+      - name: run some tests
+        shell: bash
+        env:
+          PATH: ${{github.workspace}}\minimal-sdk\mingw64\bin;${{github.workspace}}\minimal-sdk\usr\bin;C:\Windows\system32;C:\Windows;C:\Windows\system32\wbem
+        run: |
+          set -x
+          . /etc/profile
+
+          # cygpath works
+          test "$(cygpath -aw /)" = "${{github.workspace}}\minimal-sdk" || exit 1
+
+          # comes with GCC and can compile a DLL
+          test "$(type -p gcc)" = "/mingw64/bin/gcc" || exit 1
+          cat >dll.c <<-\EOF &&
+          __attribute__((dllexport)) int increment(int i)
+          {
+              return i + 1;
+          }
+          EOF
+
+          gcc -Wall -g -O2 -shared -o sample.dll dll.c || exit 1
+          ls -la
+
+          # stat works
+          test "stat is /usr/bin/stat" = "$(type stat)" || exit 1
+          stat /usr/bin/stat.exe || exit 1
+
+          # unzip works
+          test "unzip is /usr/bin/unzip" = "$(type unzip)" || exit 1
+          git init unzip-test &&
+          echo TEST >unzip-test/README &&
+          git -C unzip-test add -A &&
+          git -C unzip-test -c user.name=A -c user.email=b@c.d commit -m 'Testing, testing...' &&
+          git --git-dir=unzip-test/.git archive -o test.zip HEAD &&
+          unzip -v test.zip >unzip-test.out &&
+          cat unzip-test.out &&
+          test "grep is /usr/bin/grep" = "$(type grep)" || exit 1
+          grep README unzip-test.out
