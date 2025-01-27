@@ -2320,7 +2320,7 @@ symlink_worker (const char *oldpath, path_conv &win32_newpath, bool isdevice)
 		  set_errno (src_path.error);
 		  __leave;
 		}
-	      if (!src_path.isdevice () && !src_path.is_fs_special ())
+	      if (!src_path.isspecial ())
 	        {
 		  /* MSYS copy file instead make symlink */
 
