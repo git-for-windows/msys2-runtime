@@ -1462,7 +1462,7 @@ sigpacket::process ()
 
   /* Don't try to send signals if we're just starting up since signal masks
      may not be available.  */
-  if (!cygwin_finished_initializing)
+  if (!cygwin_finished_initializing || exit_state > ES_EXIT_STARTING)
     {
       rc = -1;
       goto done;
@@ -1685,7 +1685,7 @@ _cygtls::call_signal_handler ()
   while (1)
     {
       lock ();
-      if (!sig)
+      if (!sig || exit_state > ES_EXIT_STARTING)
 	{
 	  unlock ();
 	  break;
