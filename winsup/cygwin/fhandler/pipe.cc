@@ -1158,7 +1158,7 @@ fhandler_pipe::set_pipe_buf_size ()
   status = NtQueryInformationFile (get_handle (), &io, &fpli, sizeof fpli,
 				   FilePipeLocalInformation);
   if (NT_SUCCESS (status))
-    pipe_buf_size = fpli.InboundQuota;
+    pipe_buf_size = fpli.InboundQuota < PIPE_BUF ? PIPE_BUF : fpli.InboundQuota;
 }
 
 int
