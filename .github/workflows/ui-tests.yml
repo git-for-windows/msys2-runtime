@@ -1,0 +1,94 @@
+name: ui-tests
+
+on:
+  workflow_call:
+    inputs:
+      msys2-runtime-artifact-name:
+        required: true
+        type: string
+
+env:
+  AUTOHOTKEY_VERSION: 2.0.19
+  WT_VERSION: 1.22.11141.0
+
+jobs:
+  ui-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Corresponds to Windows Server versions
+        # See https://github.com/actions/runner-images?tab=readme-ov-file#available-images
+        os: [windows-2022, windows-2025]
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.msys2-runtime-artifact-name }}
+          path: ${{ runner.temp }}/artifacts
+      - name: replace MSYS2 runtime
+        run: |
+          $p = Get-ChildItem -Recurse "${env:RUNNER_TEMP}\artifacts" | where {$_.Name -eq "msys-2.0.dll"} | Select -ExpandProperty VersionInfo | Select -First 1 -ExpandProperty FileName
+          cp $p "c:/Program Files/Git/usr/bin/msys-2.0.dll"
+
+      - uses: actions/cache/restore@v4
+        id: restore-wt
+        with:
+          key: wt-${{ env.WT_VERSION }}
+          path: ${{ runner.temp }}/wt.zip
+      - name: Download Windows Terminal
+        if: steps.restore-wt.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -fLo "$RUNNER_TEMP/wt.zip" \
+          https://github.com/microsoft/terminal/releases/download/v$WT_VERSION/Microsoft.WindowsTerminal_${WT_VERSION}_x64.zip
+      - uses: actions/cache/save@v4
+        if: steps.restore-wt.outputs.cache-hit != 'true'
+        with:
+          key: wt-${{ env.WT_VERSION }}
+          path: ${{ runner.temp }}/wt.zip
+      - name: Install Windows Terminal
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$WINDIR/system32/tar.exe" -xf "$RUNNER_TEMP/wt.zip" &&
+          cygpath -aw terminal-$WT_VERSION >>$GITHUB_PATH
+      - uses: actions/cache/restore@v4
+        id: restore-ahk
+        with:
+          key: ahk-${{ env.AUTOHOTKEY_VERSION }}
+          path: ${{ runner.temp }}/ahk.zip
+      - name: Download AutoHotKey2
+        if: steps.restore-ahk.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -L -o "$RUNNER_TEMP/ahk.zip" \
+            https://github.com/AutoHotkey/AutoHotkey/releases/download/v$AUTOHOTKEY_VERSION/AutoHotkey_$AUTOHOTKEY_VERSION.zip
+      - uses: actions/cache/save@v4
+        if: steps.restore-ahk.outputs.cache-hit != 'true'
+        with:
+          key: ahk-${{ env.AUTOHOTKEY_VERSION }}
+          path: ${{ runner.temp }}/ahk.zip
+      - name: Install AutoHotKey2
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/ahk" &&
+          "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP/ahk" -xf "$RUNNER_TEMP/ahk.zip" &&
+          cygpath -aw "$RUNNER_TEMP/ahk" >>$GITHUB_PATH
+      - uses: actions/setup-node@v4 # the hook uses node for the background process
+
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            ui-tests
+      - name: Run UI tests
+        id: ui-tests
+        run: |
+          $p = Start-Process -PassThru -FilePath "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" -ArgumentList ui-tests\background-hook.ahk, "$PWD\bg-hook"
+          $p.WaitForExit()
+          if ($p.ExitCode -ne 0) { echo "::error::Test failed!" } else { echo "::notice::Test log" }
+          type bg-hook.log
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - name: Show logs, if canceled
+        if: cancelled()
+        run: type bg-hook.log
