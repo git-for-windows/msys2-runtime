@@ -19,6 +19,8 @@ jobs:
         with:
           name: ${{ inputs.msys2-runtime-artifact-name }}
           path: ${{ runner.temp }}/artifacts
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 14879384125
       - name: replace MSYS2 runtime
         run: |
           $p = Get-ChildItem -Recurse "${env:RUNNER_TEMP}\artifacts" | where {$_.Name -eq "msys-2.0.dll"} | Select -ExpandProperty VersionInfo | Select -First 1 -ExpandProperty FileName
