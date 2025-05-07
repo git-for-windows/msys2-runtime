@@ -1,0 +1,188 @@
+name: ui-tests
+
+on:
+  workflow_call:
+    inputs:
+      msys2-runtime-artifact-name:
+        required: true
+        type: string
+
+env:
+  AUTOHOTKEY_VERSION: 2.0.19
+  WT_VERSION: 1.22.11141.0
+  WIN32_OPENSSH_VERSION: 9.8.3.0p2-Preview
+
+jobs:
+  ui-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Corresponds to Windows Server versions
+        # See https://github.com/actions/runner-images?tab=readme-ov-file#available-images
+        os: [windows-2022, windows-2025]
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.msys2-runtime-artifact-name }}
+          path: ${{ runner.temp }}/artifacts
+      - name: replace MSYS2 runtime
+        run: |
+          $p = Get-ChildItem -Recurse "${env:RUNNER_TEMP}\artifacts" | where {$_.Name -eq "msys-2.0.dll"} | Select -ExpandProperty VersionInfo | Select -First 1 -ExpandProperty FileName
+          cp $p "c:/Program Files/Git/usr/bin/msys-2.0.dll"
+
+      - uses: actions/cache/restore@v4
+        id: restore-wt
+        with:
+          key: wt-${{ env.WT_VERSION }}
+          path: ${{ runner.temp }}/wt.zip
+      - name: Download Windows Terminal
+        if: steps.restore-wt.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -fLo "$RUNNER_TEMP/wt.zip" \
+          https://github.com/microsoft/terminal/releases/download/v$WT_VERSION/Microsoft.WindowsTerminal_${WT_VERSION}_x64.zip
+      - uses: actions/cache/save@v4
+        if: steps.restore-wt.outputs.cache-hit != 'true'
+        with:
+          key: wt-${{ env.WT_VERSION }}
+          path: ${{ runner.temp }}/wt.zip
+      - name: Install Windows Terminal
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$WINDIR/system32/tar.exe" -xf "$RUNNER_TEMP/wt.zip" &&
+          cygpath -aw terminal-$WT_VERSION >>$GITHUB_PATH
+      - uses: actions/cache/restore@v4
+        id: restore-ahk
+        with:
+          key: ahk-${{ env.AUTOHOTKEY_VERSION }}
+          path: ${{ runner.temp }}/ahk.zip
+      - name: Download AutoHotKey2
+        if: steps.restore-ahk.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -L -o "$RUNNER_TEMP/ahk.zip" \
+            https://github.com/AutoHotkey/AutoHotkey/releases/download/v$AUTOHOTKEY_VERSION/AutoHotkey_$AUTOHOTKEY_VERSION.zip
+      - uses: actions/cache/save@v4
+        if: steps.restore-ahk.outputs.cache-hit != 'true'
+        with:
+          key: ahk-${{ env.AUTOHOTKEY_VERSION }}
+          path: ${{ runner.temp }}/ahk.zip
+      - name: Install AutoHotKey2
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/ahk" &&
+          "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP/ahk" -xf "$RUNNER_TEMP/ahk.zip" &&
+          cygpath -aw "$RUNNER_TEMP/ahk" >>$GITHUB_PATH
+      - uses: actions/setup-node@v4 # the hook uses node for the background process
+      - uses: actions/cache/restore@v4
+        id: restore-win32-openssh
+        with:
+          key: win32-openssh-${{ env.WIN32_OPENSSH_VERSION }}
+          path: ${{ runner.temp }}/win32-openssh.zip
+      - name: Download Win32-OpenSSH
+        if: steps.restore-win32-openssh.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -fLo "$RUNNER_TEMP/win32-openssh.zip" \
+            https://github.com/PowerShell/Win32-OpenSSH/releases/download/v$WIN32_OPENSSH_VERSION/OpenSSH-Win64.zip
+      - uses: actions/cache/save@v4
+        if: steps.restore-win32-openssh.outputs.cache-hit != 'true'
+        with:
+          key: win32-openssh-${{ env.WIN32_OPENSSH_VERSION }}
+          path: ${{ runner.temp }}/win32-openssh.zip
+      - name: Unpack Win32-OpenSSH
+        shell: bash
+        run: |
+          "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP" -xvf "$RUNNER_TEMP/win32-openssh.zip" &&
+          echo "OPENSSH_FOR_WINDOWS_DIRECTORY=$(cygpath -aw "$RUNNER_TEMP/OpenSSH-Win64")" >>$GITHUB_ENV
+
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            ui-tests
+      - name: Run UI tests
+        id: ui-tests
+        timeout-minutes: 10
+        working-directory: ui-tests
+        run: |
+          $exitCode = 0
+          & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force background-hook.ahk "$PWD\bg-hook" 2>&1 | Out-Default
+          if (!$?) { $exitCode = 1; echo "::error::Test failed!" } else { echo "::notice::Test log" }
+          type bg-hook.log
+          $env:LARGE_FILES_DIRECTORY = "${env:RUNNER_TEMP}\large"
+          & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force ctrl-c.ahk "$PWD\ctrl-c" 2>&1 | Out-Default
+          if (!$?) { $exitCode = 1; echo "::error::Ctrl+C Test failed!" } else { echo "::notice::Ctrl+C Test log" }
+          type ctrl-c.log
+          exit $exitCode
+      - name: Show logs
+        if: always()
+        working-directory: ui-tests
+        run: |
+          type bg-hook.log
+          type ctrl-c.log
+      - name: Take screenshot, if canceled
+        id: take-screenshot
+        if: cancelled() || failure()
+        shell: powershell
+        run: |
+          Add-Type -TypeDefinition @"
+          using System;
+          using System.Runtime.InteropServices;
+
+          public class DpiHelper {
+              [DllImport("user32.dll")]
+              public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
+              [DllImport("Shcore.dll")]
+              public static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
+              [DllImport("User32.dll")]
+              public static extern IntPtr MonitorFromPoint(System.Drawing.Point pt, uint dwFlags);
+
+              [DllImport("user32.dll")]
+              public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+              public static uint GetDPI() {
+                  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+                  SetProcessDpiAwarenessContext((IntPtr)(-4));
+
+                  uint dpiX, dpiY;
+                  IntPtr monitor = MonitorFromPoint(new System.Drawing.Point(0, 0), 2); // MONITOR_DEFAULTTONEAREST
+                  GetDpiForMonitor(monitor, 0, out dpiX, out dpiY); // MDT_EFFECTIVE_DPI
+                  return (dpiX + dpiY) / 2;
+              }
+          }
+          "@ -ReferencedAssemblies "System.Drawing.dll"
+
+          # First, minimize the Console window in which this script is running
+          $hwnd = (Get-Process -Id $PID).MainWindowHandle
+          $SW_MINIMIZE = 6
+
+          [DpiHelper]::ShowWindow($hwnd, $SW_MINIMIZE)
+
+          # Now, get the DPI
+          $dpi = [DpiHelper]::GetDPI()
+
+          # This function takes a screenshot and saves it as a PNG file
+          [Reflection.Assembly]::LoadWithPartialName("System.Drawing")
+          function screenshot([Drawing.Rectangle]$bounds, $path) {
+            $bmp = New-Object Drawing.Bitmap $bounds.width, $bounds.height
+            $graphics = [Drawing.Graphics]::FromImage($bmp)
+            $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.size)
+            $bmp.Save($path)
+            $graphics.Dispose()
+            $bmp.Dispose()
+          }
+          Add-Type -AssemblyName System.Windows.Forms
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+          $bounds = [Drawing.Rectangle]::FromLTRB(0, 0, $screen.Bounds.Width * $dpi / 96, $screen.Bounds.Height * $dpi / 96)
+          screenshot $bounds "ui-tests/screenshot.png"
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-tests-${{ matrix.os }}
+          path: ui-tests
