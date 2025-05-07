@@ -118,6 +118,14 @@ jobs:
     with:
       git-artifacts-extract-location: ${{ needs.minimal-sdk-artifact.outputs.git-artifacts-extract-location }}
 
+  ui-tests:
+    needs: build
+    uses: ./.github/workflows/ui-tests.yml
+    with:
+      msys2-runtime-artifact-name: install
+    permissions:
+      contents: read
+
   generate-msys2-tests-matrix:
     runs-on: ubuntu-latest
     outputs:
