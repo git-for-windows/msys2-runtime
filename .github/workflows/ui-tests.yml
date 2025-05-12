@@ -13,7 +13,14 @@ env:
 
 jobs:
   ui-tests:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Corresponds to Windows Server versions
+        # See https://github.com/actions/runner-images?tab=readme-ov-file#available-images
+        os: [windows-2022, windows-2025]
+
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/download-artifact@v4
         with:
