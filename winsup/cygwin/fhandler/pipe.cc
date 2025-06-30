@@ -561,7 +561,7 @@ fhandler_pipe_fifo::raw_write (const void *ptr, size_t len)
       ULONG len1;
       DWORD waitret = WAIT_OBJECT_0;
 
-      if (left > chunk && !real_non_blocking_mode)
+      if (left > chunk && !is_nonblocking ())
 	len1 = chunk;
       else
 	len1 = (ULONG) left;
