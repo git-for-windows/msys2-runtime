@@ -491,14 +491,14 @@ fhandler_pipe_fifo::raw_write (const void *ptr, size_t len)
 				       FilePipeLocalInformation);
       if (NT_SUCCESS (status))
 	{
-	  if (fpli.WriteQuotaAvailable != 0)
+	  if (fpli.WriteQuotaAvailable == fpli.InboundQuota)
 	    avail = fpli.WriteQuotaAvailable;
-	  else /* WriteQuotaAvailable == 0 */
+	  else /* WriteQuotaAvailable != InboundQuota */
 	    { /* Refer to the comment in select.cc: pipe_data_available(). */
 	      /* NtSetInformationFile() in set_pipe_non_blocking(true) seems
 		 to fail with STATUS_PIPE_BUSY if the pipe is not empty.
-		 In this case, the pipe is really full if WriteQuotaAvailable
-		 is zero. Otherwise, the pipe is empty. */
+		 In this case, WriteQuotaAvailable indicates real pipe space.
+		 Otherwise, the pipe is empty. */
 	      status = fh->set_pipe_non_blocking (true);
 	      if (NT_SUCCESS (status))
 		/* Pipe should be empty because reader is waiting for data. */
@@ -506,9 +506,14 @@ fhandler_pipe_fifo::raw_write (const void *ptr, size_t len)
 		fh->set_pipe_non_blocking (false);
 	      else if (status == STATUS_PIPE_BUSY)
 		{
-		  /* Full */
-		  set_errno (EAGAIN);
-		  goto err;
+		  if (fpli.WriteQuotaAvailable == 0)
+		    {
+		      /* Full */
+		      set_errno (EAGAIN);
+		      goto err;
+		    }
+		  avail = fpli.WriteQuotaAvailable;
+		  status = STATUS_SUCCESS;
 		}
 	    }
 	}
@@ -561,7 +566,7 @@ fhandler_pipe_fifo::raw_write (const void *ptr, size_t len)
       ULONG len1;
       DWORD waitret = WAIT_OBJECT_0;
 
-      if (left > chunk && !real_non_blocking_mode)
+      if (left > chunk && !is_nonblocking ())
 	len1 = chunk;
       else
 	len1 = (ULONG) left;
@@ -650,9 +655,7 @@ fhandler_pipe_fifo::raw_write (const void *ptr, size_t len)
 	  if (io.Information > 0 || len <= PIPE_BUF || short_write_once)
 	    break;
 	  /* Independent of being blocking or non-blocking, if we're here,
-	     the pipe has less space than requested.  If the pipe is a
-	     non-Cygwin pipe, just try the old strategy of trying a half
-	     write.  If the pipe has at
+	     the pipe has less space than requested.  If the pipe has at
 	     least PIPE_BUF bytes available, try to write all matching
 	     PIPE_BUF sized blocks.  If it's less than PIPE_BUF,  try
 	     the next less power of 2 bytes.  This is not really the Linux
@@ -660,12 +663,13 @@ fhandler_pipe_fifo::raw_write (const void *ptr, size_t len)
 	     in a very implementation-defined way we can't emulate, but it
 	     resembles it closely enough to get useful results. */
 	  avail = pipe_data_available (-1, this, get_handle (), PDA_WRITE);
-	  if (avail < 1)	/* error or pipe closed */
+	  if (avail == PDA_UNKNOWN && real_non_blocking_mode)
+	    avail = len1;
+	  else if (avail == 0 || !PDA_NOERROR (avail))
+	    /* error or pipe closed */
 	    break;
 	  if (avail > len1)	/* somebody read from the pipe */
 	    avail = len1;
-	  if (avail == 1)	/* 1 byte left or non-Cygwin pipe */
-	    len1 >>= 1;
 	  else if (avail >= PIPE_BUF)
 	    len1 = avail & ~(PIPE_BUF - 1);
 	  else

@@ -601,7 +601,7 @@ pipe_data_available (int fd, fhandler_base *fh, HANDLE h, int mode)
       if (mode == PDA_READ
 	  && PeekNamedPipe (h, NULL, 0, NULL, &nbytes_in_pipe, NULL))
 	return nbytes_in_pipe;
-      return -1;
+      return PDA_ERROR;
     }
 
   IO_STATUS_BLOCK iosb = {{0}, 0};
@@ -618,46 +618,49 @@ pipe_data_available (int fd, fhandler_base *fh, HANDLE h, int mode)
 	 access on the write end.  */
       select_printf ("fd %d, %s, NtQueryInformationFile failed, status %y",
 		     fd, fh->get_name (), status);
-      return (mode == PDA_WRITE) ? 1 : -1;
+      return (mode == PDA_WRITE) ? PDA_UNKNOWN : PDA_ERROR;
     }
   if (mode == PDA_WRITE)
     {
       /* If there is anything available in the pipe buffer then signal
-        that.  This means that a pipe could still block since you could
-        be trying to write more to the pipe than is available in the
-        buffer but that is the hazard of select().
+	 that.  This means that a pipe could still block since you could
+	 be trying to write more to the pipe than is available in the
+	 buffer but that is the hazard of select().
 
-        Note that WriteQuotaAvailable is unreliable.
+	 Note that WriteQuotaAvailable is unreliable.
 
-        Usually WriteQuotaAvailable on the write side reflects the space
-        available in the inbound buffer on the read side.  However, if a
-        pipe read is currently pending, WriteQuotaAvailable on the write side
-        is decremented by the number of bytes the read side is requesting.
-        So it's possible (even likely) that WriteQuotaAvailable is 0, even
-        if the inbound buffer on the read side is not full.  This can lead to
-        a deadlock situation: The reader is waiting for data, but select
-        on the writer side assumes that no space is available in the read
-        side inbound buffer.
+	 Usually WriteQuotaAvailable on the write side reflects the space
+	 available in the inbound buffer on the read side.  However, if a
+	 pipe read is currently pending, WriteQuotaAvailable on the write side
+	 is decremented by the number of bytes the read side is requesting.
+	 So it's possible (even likely) that WriteQuotaAvailable is less than
+	 actual space available in the pipe, even if the inbound buffer is
+	 empty. This can lead to a deadlock situation: The reader is waiting
+	 for data, but select on the writer side assumes that no space is
+	 available in the read side inbound buffer.
 
-	Consequentially, there are two possibilities when WriteQuotaAvailable
-	is 0. One is that the buffer is really full. The other is that the
-	reader is currently trying to read the pipe and it is pending.
-	In the latter case, the fact that the reader cannot read the data
-	immediately means that the pipe is empty. In the former case,
-	NtSetInformationFile() in set_pipe_non_blocking(true) will fail
-	with STATUS_PIPE_BUSY, while it succeeds in the latter case.
-	Therefore, we can distinguish these cases by calling set_pipe_non_
-	blocking(true). If it returns success, the pipe is empty, so we
-	return the pipe buffer size. Otherwise, we return 0. */
-      if (fh->get_device () == FH_PIPEW && fpli.WriteQuotaAvailable == 0)
+	 Consequentially, there are two possibilities when WriteQuotaAvailable
+	 is less than pipe size. One is that the buffer is really not empty.
+	 The other is that the reader is currently trying to read the pipe
+	 and it is pending.
+	 In the latter case, the fact that the reader cannot read the data
+	 immediately means that the pipe is empty. In the former case,
+	 NtSetInformationFile() in set_pipe_non_blocking(true) will fail
+	 with STATUS_PIPE_BUSY, while it succeeds in the latter case.
+	 Therefore, we can distinguish these cases by calling set_pipe_non_
+	 blocking(true). If it returns success, the pipe is empty, so we
+	 return the pipe buffer size. Otherwise, we return the value of
+	 WriteQuotaAvailable as is. */
+      if (fh->get_device () == FH_PIPEW
+	  && fpli.WriteQuotaAvailable < fpli.InboundQuota)
 	{
 	  NTSTATUS status =
 	    ((fhandler_pipe *) fh)->set_pipe_non_blocking (true);
 	  if (status == STATUS_PIPE_BUSY)
-	    return 0; /* Full */
+	    return fpli.WriteQuotaAvailable; /* Not empty */
 	  else if (!NT_SUCCESS (status))
 	    /* We cannot know actual write pipe space. */
-	    return 1;
+	    return PDA_UNKNOWN;
 	  /* Restore pipe mode to blocking mode */
 	  ((fhandler_pipe *) fh)->set_pipe_non_blocking (false);
 	  /* Empty */
@@ -681,7 +684,7 @@ pipe_data_available (int fd, fhandler_base *fh, HANDLE h, int mode)
       return fpli.ReadDataAvailable;
     }
   if (fpli.NamedPipeState & FILE_PIPE_CLOSING_STATE)
-    return -1;
+    return PDA_ERROR;
   return 0;
 }
 
@@ -731,7 +734,7 @@ peek_pipe (select_record *s, bool from_select)
       if (n == 0 && fh->get_echo_handle ())
 	n = pipe_data_available (s->fd, fh, fh->get_echo_handle (), PDA_READ);
 
-      if (n < 0)
+      if (n == PDA_ERROR)
 	{
 	  select_printf ("read: %s, n %d", fh->get_name (), n);
 	  if (s->except_selected)
@@ -772,8 +775,8 @@ out:
 	}
       ssize_t n = pipe_data_available (s->fd, fh, h, PDA_WRITE);
       select_printf ("write: %s, n %d", fh->get_name (), n);
-      gotone += s->write_ready = (n > 0);
-      if (n < 0 && s->except_selected)
+      gotone += s->write_ready = (n > 0 || n == PDA_UNKNOWN);
+      if (n == PDA_ERROR && s->except_selected)
 	gotone += s->except_ready = true;
     }
   return gotone;
@@ -986,7 +989,7 @@ out:
       ssize_t n = pipe_data_available (s->fd, fh, fh->get_handle (), PDA_WRITE);
       select_printf ("write: %s, n %d", fh->get_name (), n);
       gotone += s->write_ready = (n > 0);
-      if (n < 0 && s->except_selected)
+      if (n == PDA_ERROR && s->except_selected)
 	gotone += s->except_ready = true;
     }
   return gotone;
@@ -1412,7 +1415,7 @@ out:
       ssize_t n = pipe_data_available (s->fd, fh, h, PDA_WRITE);
       select_printf ("write: %s, n %d", fh->get_name (), n);
       gotone += s->write_ready = (n > 0);
-      if (n < 0 && s->except_selected)
+      if (n == PDA_ERROR && s->except_selected)
 	gotone += s->except_ready = true;
     }
   return gotone;
