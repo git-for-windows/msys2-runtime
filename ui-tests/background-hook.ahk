@@ -38,14 +38,7 @@ Send('git config user.name Test{Enter}git config user.email t@e.st{Enter}')
 Info('Committing')
 Send('git commit --allow-empty -m zOMG{Enter}')
 ; Wait for the hook to finish printing
-While not RegExMatch(CaptureTextFromWindowsTerminal(), '`n49$')
-{
-    Sleep 100
-    if A_Index > 1000
-        ExitWithError 'Timed out waiting for commit to finish'
-    MouseClick 'WheelDown', , , 20
-}
-Info('Hook finished')
+WaitForRegExInWindowsTerminal('`n49$', 'Timed out waiting for commit to finish', 'Hook finished', 100000)
 
 ; Verify that CursorUp shows the previous command
 Send('{Up}')
