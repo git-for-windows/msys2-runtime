@@ -61,8 +61,8 @@ RunWaitOne(command) {
     exec := shell.Run(A_ComSpec " /C " command " | clip", 0, true)
     if exec != 0
         ExitWithError 'Error executing command: ' command
-    ; Read and return the command's output
-    Result := A_Clipboard
+    ; Read and return the command's output, trimming trailing newlines.
+    Result := RegExReplace(A_Clipboard, '`r?`n$', '')
     Clipboard := SavedClipboard
     return Result
 }
