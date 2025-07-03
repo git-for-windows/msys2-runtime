@@ -41,6 +41,93 @@ Sleep 150
 ; Wait for the `^C` tell-tale that is the PowerShell prompt to appear
 WaitForRegExInWindowsTerminal('>[ `n`r]*$', 'Timed out waiting for interrupt', 'Sleep was interrupted as desired')
 
+; Clone via SSH test; Requires an OpenSSH for Windows `sshd.exe` whose directory needs to be specified via
+; the environment variable `OPENSSH_FOR_WINDOWS_DIRECTORY`. The clone will still be performed via Git's
+; included `ssh.exe`, to exercise the MSYS2 runtime (which these UI tests are all about).
+
+openSSHPath := EnvGet('OPENSSH_FOR_WINDOWS_DIRECTORY')
+if (openSSHPath != '' and FileExist(openSSHPath . '\sshd.exe')) {
+    Info('Generate 26M of data')
+    RunWait('git init --bare -b main large.git', '', 'Hide')
+    RunWait('git --git-dir=large.git -c alias.c="!(' .
+        'printf \"reset refs/heads/main\\n\"; ' .
+        'seq 100000 | ' .
+        'sed \"s|.*|blob\\nmark :&\\ndata <<E\\n&\\nE\\ncommit refs/heads/main\\n' .
+            'committer a <a@b.c> 1234& +0000\\ndata <<E\\n&\\nE\\nM 100644 :& file|\"' .
+    ') | git fast-import" c', '', 'Hide')
+    Info('Done generating 26M of data')
+
+    ; When running as administrator, `ssh-keygen` will generate files with
+    ; too-open permissions by default; Let's adjust them.
+    AdjustPermissions(path) {
+        if not A_IsAdmin
+            return
+        RunWait('icacls ' . path . ' /inheritance:r')
+        if A_LastError
+            ExitWithError 'Could not adjust ACL inheritance of ' . path . ': ' A_LastError
+        RunWait('icacls ' . path . ' /remove "NT AUTHORITY\Authenticated Users"')
+        if A_LastError
+            ExitWithError 'Could not remove authenticated user permission from ' . path . ': ' A_LastError
+        RunWait('icacls ' . path . ' /grant "Administrators:(R)"')
+        if A_LastError
+            ExitWithError 'Could not add admin read permission from ' . path . ': ' A_LastError
+    }
+
+    ; Set up SSH server
+    Info('Generating host key')
+    RunWait('git -c alias.c="!ssh-keygen -b 4096 -f ssh_host_rsa_key -N \"\"" c', '', 'Hide')
+    if A_LastError
+        ExitWithError 'Error generating host key: ' A_LastError
+    AdjustPermissions('ssh_host_rsa_key')
+    AdjustPermissions('ssh_host_rsa_key.pub')
+    Info('Generating client key')
+    RunWait('git -c alias.c="!ssh-keygen -f id_rsa -N \"\"" c', '', 'Hide')
+    if A_LastError
+        ExitWithError 'Error generating client key: ' A_LastError
+    AdjustPermissions('id_rsa')
+    AdjustPermissions('id_rsa.pub')
+    FileAppend('Port 2322`n' .
+        'HostKey "' . workTree . '\ssh_host_rsa_key"`n' .
+        'AuthorizedKeysFile "' . workTree . '\id_rsa.pub"`n',
+        'sshd_config')
+    sshdOptions := '-f "' . workTree . '\sshd_config" -D -d -d -d -E sshd.log'
+
+    ; Start SSH server
+    Info('Starting SSH server')
+    Run(openSSHPath . '\sshd.exe ' . sshdOptions, '', 'Hide', &sshdPID)
+    if A_LastError
+        ExitWithError 'Error starting SSH server: ' A_LastError
+    Info('Started SSH server: ' sshdPID)
+
+    Info('Starting clone')
+    workTreeMSYS := RunWaitOne('git -c alias.cygpath="!cygpath" cygpath -u "' . workTree . '"')
+    sshOptions := '-i ' . workTreeMSYS . '/id_rsa -p 2322 -T ' .
+        '-o UserKnownHostsFile=' . workTreeMSYS . '/known_hosts ' .
+        '-o StrictHostKeyChecking=accept-new '
+    ; The `--upload-pack` option is needed because OpenSSH for Windows' default shell
+    ; is `cmd.exe`, which does not handle single-quoted strings as Git expects.
+    ; An heavy-handed alternative would be to require PowerShell to be configured via
+    ; HKLM:\SOFTWARE\OpenSSH's DefaultShell property, for full details see
+    ; https://github.com/PowerShell/Win32-OpenSSH/wiki/Setting-up-a-Git-server-on-Windows-using-Git-for-Windows-and-Win32_OpenSSH
+    ;
+    ; The username is needed because by default, on domain-joined machines MSYS2's
+    ; `ssh.exe` prefixes the username with the domain name.
+    cloneOptions := '--upload-pack="powershell git upload-pack" ' .
+        EnvGet('USERNAME') . '@localhost:' . workTree . '\large.git large-clone'
+    Send('git -c core.sshCommand="ssh ' . sshOptions . '" clone ' . cloneOptions . '{Enter}')
+    Sleep 50
+    Info('Waiting for clone to start')
+    WinActivate('ahk_id ' . hwnd)
+    WaitForRegExInWindowsTerminal('remote: ', 'Timed out waiting for clone to start', 'Clone started', 5000, 'ahk_id ' . hwnd)
+    Info('Trying to interrupt clone')
+    Send('^C') ; interrupt clone
+    Sleep 150
+    WaitForRegExInWindowsTerminal('`nfatal: (.*`r?`n){1,3}PS .*>[ `n`r]*$', 'Timed out waiting for clone to be interrupted', 'clone was interrupted as desired')
+
+    if DirExist(workTree . '\large-clone')
+        ExitWithError('`large-clone` was unexpectedly not deleted on interrupt')
+}
+
 Send('exit{Enter}')
 Sleep 50
 CleanUpWorkTree()
