@@ -90,3 +90,16 @@ CaptureTextFromWindowsTerminal() {
     Clipboard := SavedClipboard
     return Result
 }
+
+WaitForRegExInWindowsTerminal(regex, errorMessage, successMessage, timeout := 5000) {
+    timeout := timeout + A_TickCount
+    ; Wait for the regex to match in the terminal output
+    while not RegExMatch(CaptureTextFromWindowsTerminal(), regex)
+    {
+        Sleep 100
+        if A_TickCount > timeout
+            ExitWithError errorMessage
+        MouseClick 'WheelDown', , , 20
+    }
+    Info(successMessage)
+}
