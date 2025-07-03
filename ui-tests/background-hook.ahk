@@ -10,22 +10,26 @@
 ; This was fixed in the Cygwin/MSYS2 runtime, but then regressed again.
 ; This test is meant to verify that the issue is fixed and remains so.
 
-; First, set the worktree path; This path will be reused
-; for the `.log` file).
-if A_Args.Length > 0
-    workTree := A_Args[1]
-else
-{
-    ; Create a unique worktree path in the TEMP directory.
-    workTree := EnvGet('TEMP') . '\git-test-background-hook'
-    if FileExist(workTree)
+SetWorkTree() {
+    global workTree
+    ; First, set the worktree path; This path will be reused
+    ; for the `.log` file).
+    if A_Args.Length > 0
+        workTree := A_Args[1]
+    else
     {
-      counter := 0
-      while FileExist(workTree '-' counter)
-        counter++
-      workTree := workTree '-' counter
+        ; Create a unique worktree path in the TEMP directory.
+        workTree := EnvGet('TEMP') . '\git-test-background-hook'
+        if FileExist(workTree)
+        {
+            counter := 0
+            while FileExist(workTree '-' counter)
+                counter++
+            workTree := workTree '-' counter
+        }
     }
 }
+SetWorkTree()
 
 Info(text) {
     FileAppend text '`n', workTree '.log'
