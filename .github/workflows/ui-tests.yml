@@ -10,6 +10,7 @@ on:
 env:
   AUTOHOTKEY_VERSION: 2.0.19
   WT_VERSION: 1.22.11141.0
+  WIN32_OPENSSH_VERSION: 9.8.3.0p2-Preview
 
 jobs:
   ui-tests:
@@ -76,6 +77,27 @@ jobs:
           "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP/ahk" -xf "$RUNNER_TEMP/ahk.zip" &&
           cygpath -aw "$RUNNER_TEMP/ahk" >>$GITHUB_PATH
       - uses: actions/setup-node@v4 # the hook uses node for the background process
+      - uses: actions/cache/restore@v4
+        id: restore-win32-openssh
+        with:
+          key: win32-openssh-${{ env.WIN32_OPENSSH_VERSION }}
+          path: ${{ runner.temp }}/win32-openssh.zip
+      - name: Download Win32-OpenSSH
+        if: steps.restore-win32-openssh.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -fLo "$RUNNER_TEMP/win32-openssh.zip" \
+            https://github.com/PowerShell/Win32-OpenSSH/releases/download/v$WIN32_OPENSSH_VERSION/OpenSSH-Win64.zip
+      - uses: actions/cache/save@v4
+        if: steps.restore-win32-openssh.outputs.cache-hit != 'true'
+        with:
+          key: win32-openssh-${{ env.WIN32_OPENSSH_VERSION }}
+          path: ${{ runner.temp }}/win32-openssh.zip
+      - name: Unpack Win32-OpenSSH
+        shell: bash
+        run: |
+          "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP" -xvf "$RUNNER_TEMP/win32-openssh.zip" &&
+          echo "OPENSSH_FOR_WINDOWS_DIRECTORY=$(cygpath -aw "$RUNNER_TEMP/OpenSSH-Win64")" >>$GITHUB_ENV
 
       - uses: actions/checkout@v4
         with:
