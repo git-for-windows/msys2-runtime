@@ -41,6 +41,17 @@ Sleep 150
 ; Wait for the `^C` tell-tale that is the PowerShell prompt to appear
 WaitForRegExInWindowsTerminal('>[ `n`r]*$', 'Timed out waiting for interrupt', 'Sleep was interrupted as desired')
 
+; ping test (`cat.exe` should be interrupted, too)
+Send('git -c alias.c="{!}cat | /c/windows/system32/ping -t localhost" c{Enter}')
+Sleep 500
+WaitForRegExInWindowsTerminal('Pinging ', 'Timed out waiting for pinging to start', 'Pinging started')
+Send('^C') ; interrupt ping and cat
+Sleep 150
+; Wait for the `^C` tell-tale to appear
+WaitForRegExInWindowsTerminal('Control-C', 'Timed out waiting for pinging to be interrupted', 'Pinging was interrupted as desired')
+; Wait for the `^C` tell-tale that is the PowerShell prompt to appear
+WaitForRegExInWindowsTerminal('>[ `n`r]*$', 'Timed out waiting for `cat.exe` to be interrupted', '`cat.exe` was interrupted as desired')
+
 ; Clone via SSH test; Requires an OpenSSH for Windows `sshd.exe` whose directory needs to be specified via
 ; the environment variable `OPENSSH_FOR_WINDOWS_DIRECTORY`. The clone will still be performed via Git's
 ; included `ssh.exe`, to exercise the MSYS2 runtime (which these UI tests are all about).
