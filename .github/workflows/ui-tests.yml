@@ -90,11 +90,16 @@ jobs:
           & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force background-hook.ahk "$PWD\bg-hook" 2>&1 | Out-Default
           if (!$?) { $exitCode = 1; echo "::error::Test failed!" } else { echo "::notice::Test log" }
           type bg-hook.log
+          & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force ctrl-c.ahk "$PWD\ctrl-c" 2>&1 | Out-Default
+          if (!$?) { $exitCode = 1; echo "::error::Ctrl+C Test failed!" } else { echo "::notice::Ctrl+C Test log" }
+          type ctrl-c.log
           exit $exitCode
       - name: Show logs
         if: always()
         working-directory: ui-tests
-        run: type bg-hook.log
+        run: |
+          type bg-hook.log
+          type ctrl-c.log
       - name: Take screenshot, if canceled
         id: take-screenshot
         if: cancelled() || failure()
