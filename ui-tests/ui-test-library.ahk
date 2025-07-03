@@ -18,6 +18,25 @@ SetWorkTree(defaultName) {
             workTree := workTree '-' counter
         }
     }
+
+    SetWorkingDir(EnvGet('TEMP'))
+    Info 'uname: ' RunWaitOne('uname -a')
+    Info RunWaitOne('git version --build-options')
+
+    RunWait('git init "' workTree '"', '', 'Hide')
+    if A_LastError
+        ExitWithError 'Could not initialize Git worktree at: ' workTree
+
+    SetWorkingDir(workTree)
+    if A_LastError
+        ExitWithError 'Could not set working directory to: ' workTree
+}
+
+CleanUpWorkTree() {
+    global workTree
+    SetWorkingDir(EnvGet('TEMP'))
+    Info 'Cleaning up worktree: ' workTree
+    DirDelete(workTree, true)
 }
 
 Info(text) {
