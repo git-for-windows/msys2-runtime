@@ -55,11 +55,11 @@ ExitWithError(error) {
 }
 
 RunWaitOne(command) {
-   shell := ComObject("WScript.Shell")
-   ; Execute a single command via cmd.exe
-   exec := shell.Exec(A_ComSpec " /C " command)
-   ; Read and return the command's output
-   return exec.StdOut.ReadAll()
+    shell := ComObject("WScript.Shell")
+    ; Execute a single command via cmd.exe
+    exec := shell.Exec(A_ComSpec " /C " command)
+    ; Read and return the command's output
+    return exec.StdOut.ReadAll()
 }
 
 ; This function is quite the hack. It assumes that the Windows Terminal is the active window,
