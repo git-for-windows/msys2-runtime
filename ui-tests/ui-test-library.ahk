@@ -59,6 +59,8 @@ RunWaitOne(command) {
     shell := ComObject("WScript.Shell")
     ; Execute a single command via cmd.exe
     exec := shell.Run(A_ComSpec " /C " command " | clip", 0, true)
+    if exec != 0
+        ExitWithError 'Error executing command: ' command
     ; Read and return the command's output
     Result := A_Clipboard
     Clipboard := SavedClipboard
