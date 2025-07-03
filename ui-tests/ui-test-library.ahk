@@ -55,11 +55,14 @@ ExitWithError(error) {
 }
 
 RunWaitOne(command) {
+    SavedClipboard := ClipboardAll
     shell := ComObject("WScript.Shell")
     ; Execute a single command via cmd.exe
-    exec := shell.Exec(A_ComSpec " /C " command)
+    exec := shell.Run(A_ComSpec " /C " command " | clip", 0, true)
     ; Read and return the command's output
-    return exec.StdOut.ReadAll()
+    Result := A_Clipboard
+    Clipboard := SavedClipboard
+    return Result
 }
 
 ; This function is quite the hack. It assumes that the Windows Terminal is the active window,
