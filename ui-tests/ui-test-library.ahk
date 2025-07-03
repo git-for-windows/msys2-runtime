@@ -1,6 +1,6 @@
 ; Reusable library functions for the UI tests.
 
-SetWorkTree() {
+SetWorkTree(defaultName) {
     global workTree
     ; First, set the worktree path; This path will be reused
     ; for the `.log` file).
@@ -9,7 +9,7 @@ SetWorkTree() {
     else
     {
         ; Create a unique worktree path in the TEMP directory.
-        workTree := EnvGet('TEMP') . '\git-test-background-hook'
+        workTree := EnvGet('TEMP') . '\' . defaultName
         if FileExist(workTree)
         {
             counter := 0

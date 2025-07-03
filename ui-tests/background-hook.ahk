@@ -11,7 +11,7 @@
 ; This was fixed in the Cygwin/MSYS2 runtime, but then regressed again.
 ; This test is meant to verify that the issue is fixed and remains so.
 
-SetWorkTree()
+SetWorkTree('git-test-background-hook')
 
 SetWorkingDir(EnvGet('TEMP'))
 Info 'uname: ' RunWaitOne('uname -a')
