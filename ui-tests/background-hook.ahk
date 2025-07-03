@@ -85,7 +85,7 @@ CloseWindow := true
 WinMove 0, 0
 Info 'Moved window to top left (so that the bottom is not cut off)'
 
-CaptureText() {
+CaptureTextFromWindowsTerminal() {
     ControlGetPos &cx, &cy, &cw, &ch, 'Windows.UI.Composition.DesktopWindowContentBridge1', "A"
     titleBarHeight := 54
     scrollBarWidth := 28
@@ -109,7 +109,7 @@ Send('git config user.name Test{Enter}git config user.email t@e.st{Enter}')
 Info('Committing')
 Send('git commit --allow-empty -m zOMG{Enter}')
 ; Wait for the hook to finish printing
-While not RegExMatch(CaptureText(), '`n49$')
+While not RegExMatch(CaptureTextFromWindowsTerminal(), '`n49$')
 {
     Sleep 100
     if A_Index > 1000
@@ -121,7 +121,7 @@ Info('Hook finished')
 ; Verify that CursorUp shows the previous command
 Send('{Up}')
 Sleep 150
-Text := CaptureText()
+Text := CaptureTextFromWindowsTerminal()
 if not RegExMatch(Text, 'git commit --allow-empty -m zOMG *$')
     ExitWithError 'Cursor Up did not work: ' Text
 Info('Match!')
