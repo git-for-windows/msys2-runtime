@@ -13,18 +13,6 @@
 
 SetWorkTree('git-test-background-hook')
 
-SetWorkingDir(EnvGet('TEMP'))
-Info 'uname: ' RunWaitOne('uname -a')
-Info RunWaitOne('git version --build-options')
-
-RunWait('git init "' workTree '"', '', 'Hide')
-if A_LastError
-    ExitWithError 'Could not initialize Git worktree at: ' workTree
-
-SetWorkingDir(workTree)
-if A_LastError
-    ExitWithError 'Could not set working directory to: ' workTree
-
 if not FileExist('.git/hooks') and not DirCreate('.git/hooks')
     ExitWithError 'Could not create hooks directory: ' workTree
 
@@ -70,5 +58,4 @@ Info('Match!')
 Send('^C')
 Send('exit{Enter}')
 Sleep 50
-SetWorkingDir(EnvGet('TEMP'))
-DirDelete(workTree, true)
+CleanUpWorkTree()
