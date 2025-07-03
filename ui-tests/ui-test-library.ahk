@@ -20,7 +20,7 @@ SetWorkTree(defaultName) {
     }
 
     SetWorkingDir(EnvGet('TEMP'))
-    Info 'uname: ' RunWaitOne('uname -a')
+    Info 'uname: ' RunWaitOne('git -c alias.uname="!uname" uname -a')
     Info RunWaitOne('git version --build-options')
 
     RunWait('git init "' workTree '"', '', 'Hide')
