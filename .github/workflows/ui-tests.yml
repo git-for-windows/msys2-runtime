@@ -94,6 +94,63 @@ jobs:
         if: cancelled()
         working-directory: ui-tests
         run: type bg-hook.log
+      - name: Take screenshot, if canceled
+        id: take-screenshot
+        if: cancelled() || failure()
+        shell: powershell
+        run: |
+          Add-Type -TypeDefinition @"
+          using System;
+          using System.Runtime.InteropServices;
+
+          public class DpiHelper {
+              [DllImport("user32.dll")]
+              public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
+              [DllImport("Shcore.dll")]
+              public static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
+              [DllImport("User32.dll")]
+              public static extern IntPtr MonitorFromPoint(System.Drawing.Point pt, uint dwFlags);
+
+              [DllImport("user32.dll")]
+              public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+              public static uint GetDPI() {
+                  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+                  SetProcessDpiAwarenessContext((IntPtr)(-4));
+
+                  uint dpiX, dpiY;
+                  IntPtr monitor = MonitorFromPoint(new System.Drawing.Point(0, 0), 2); // MONITOR_DEFAULTTONEAREST
+                  GetDpiForMonitor(monitor, 0, out dpiX, out dpiY); // MDT_EFFECTIVE_DPI
+                  return (dpiX + dpiY) / 2;
+              }
+          }
+          "@ -ReferencedAssemblies "System.Drawing.dll"
+
+          # First, minimize the Console window in which this script is running
+          $hwnd = (Get-Process -Id $PID).MainWindowHandle
+          $SW_MINIMIZE = 6
+
+          [DpiHelper]::ShowWindow($hwnd, $SW_MINIMIZE)
+
+          # Now, get the DPI
+          $dpi = [DpiHelper]::GetDPI()
+
+          # This function takes a screenshot and saves it as a PNG file
+          [Reflection.Assembly]::LoadWithPartialName("System.Drawing")
+          function screenshot([Drawing.Rectangle]$bounds, $path) {
+            $bmp = New-Object Drawing.Bitmap $bounds.width, $bounds.height
+            $graphics = [Drawing.Graphics]::FromImage($bmp)
+            $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.size)
+            $bmp.Save($path)
+            $graphics.Dispose()
+            $bmp.Dispose()
+          }
+          Add-Type -AssemblyName System.Windows.Forms
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+          $bounds = [Drawing.Rectangle]::FromLTRB(0, 0, $screen.Bounds.Width * $dpi / 96, $screen.Bounds.Height * $dpi / 96)
+          screenshot $bounds "ui-tests/screenshot.png"
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
