@@ -83,6 +83,7 @@ jobs:
             ui-tests
       - name: Run UI tests
         id: ui-tests
+        timeout-minutes: 10
         working-directory: ui-tests
         run: |
           $exitCode = 0
@@ -90,8 +91,8 @@ jobs:
           if (!$?) { $exitCode = 1; echo "::error::Test failed!" } else { echo "::notice::Test log" }
           type bg-hook.log
           exit $exitCode
-      - name: Show logs, if canceled
-        if: cancelled()
+      - name: Show logs
+        if: always()
         working-directory: ui-tests
         run: type bg-hook.log
       - name: Take screenshot, if canceled
