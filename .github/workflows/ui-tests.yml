@@ -112,6 +112,7 @@ jobs:
           & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force background-hook.ahk "$PWD\bg-hook" 2>&1 | Out-Default
           if (!$?) { $exitCode = 1; echo "::error::Test failed!" } else { echo "::notice::Test log" }
           type bg-hook.log
+          $env:LARGE_FILES_DIRECTORY = "${env:RUNNER_TEMP}\large"
           & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force ctrl-c.ahk "$PWD\ctrl-c" 2>&1 | Out-Default
           if (!$?) { $exitCode = 1; echo "::error::Ctrl+C Test failed!" } else { echo "::notice::Ctrl+C Test log" }
           type ctrl-c.log
