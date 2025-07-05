@@ -50,8 +50,13 @@ WaitForRegExInWindowsTerminal('>[ `n`r]*$', 'Timed out waiting for interrupt', '
 openSSHPath := EnvGet('OPENSSH_FOR_WINDOWS_DIRECTORY')
 if (openSSHPath != '' and FileExist(openSSHPath . '\sshd.exe')) {
     Info('Generate 26M of data')
-    RunWait('git init --bare -b main large.git', '', 'Hide')
-    RunWait('git --git-dir=large.git -c alias.c="!(' .
+    largeFilesDirectory := EnvGet('LARGE_FILES_DIRECTORY')
+    if largeFilesDirectory == ''
+        largeFilesDirectory := workTree . '-large-files'
+    largeGitRepoPath := largeFilesDirectory . '\large.git'
+    largeGitClonePath := largeFilesDirectory . '\large-clone'
+    RunWait('git init --bare -b main "' . largeGitRepoPath . '"', '', 'Hide')
+    RunWait('git --git-dir="' . largeGitRepoPath . '" -c alias.c="!(' .
         'printf \"reset refs/heads/main\\n\"; ' .
         'seq 100000 | ' .
         'sed \"s|.*|blob\\nmark :&\\ndata <<E\\n&\\nE\\ncommit refs/heads/main\\n' .
@@ -134,8 +139,8 @@ if (openSSHPath != '' and FileExist(openSSHPath . '\sshd.exe')) {
     ;
     ; The username is needed because by default, on domain-joined machines MSYS2's
     ; `ssh.exe` prefixes the username with the domain name.
-    cloneOptions := '--upload-pack="powershell git upload-pack" ' .
-        EnvGet('USERNAME') . '@localhost:' . workTree . '\large.git large-clone'
+    cloneOptions := '--upload-pack="powershell git upload-pack" "' .
+        EnvGet('USERNAME') . '@localhost:' . largeGitRepoPath . '" "' . largeGitClonePath . '"'
     WaitForSshd()
     Send('git -c core.sshCommand="ssh ' . sshOptions . '" clone ' . cloneOptions . '{Enter}')
     Sleep 50
@@ -147,7 +152,7 @@ if (openSSHPath != '' and FileExist(openSSHPath . '\sshd.exe')) {
     Sleep 150
     WaitForRegExInWindowsTerminal('`nfatal: (.*`r?`n){1,3}PS .*>[ `n`r]*$', 'Timed out waiting for clone to be interrupted', 'clone was interrupted as desired')
 
-    if DirExist(workTree . '\large-clone')
+    if DirExist(largeGitClonePath)
         ExitWithError('`large-clone` was unexpectedly not deleted on interrupt')
 
     for proc in ComObjGet('winmgmts:').ExecQuery('SELECT ProcessId, Name, ExecutablePath FROM Win32_Process WHERE Name LIKE "sshd%.exe"') {
