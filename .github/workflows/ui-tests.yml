@@ -84,11 +84,11 @@ jobs:
       - name: Run UI tests
         id: ui-tests
         run: |
-          $p = Start-Process -PassThru -FilePath "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" -ArgumentList ui-tests\background-hook.ahk, "$PWD\bg-hook"
-          $p.WaitForExit()
-          if ($p.ExitCode -ne 0) { echo "::error::Test failed!" } else { echo "::notice::Test log" }
+          $exitCode = 0
+          & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force ui-tests\background-hook.ahk "$PWD\bg-hook" 2>&1 | Out-Default
+          if (!$?) { $exitCode = 1; echo "::error::Test failed!" } else { echo "::notice::Test log" }
           type bg-hook.log
-          if ($p.ExitCode -ne 0) { exit 1 }
+          exit $exitCode
       - name: Show logs, if canceled
         if: cancelled()
         run: type bg-hook.log
