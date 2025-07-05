@@ -142,6 +142,39 @@ if (openSSHPath != '' and FileExist(openSSHPath . '\sshd.exe')) {
 
     if DirExist(largeGitClonePath)
         ExitWithError('`large-clone` was unexpectedly not deleted on interrupt')
+
+    ; Now verify that the SSH-based clone actually works and does not hang
+    Info('Re-starting SSH server')
+    Run(openSSHPath . '\sshd.exe ' . sshdOptions, '', 'Hide', &sshdPID)
+    if A_LastError
+        ExitWithError 'Error starting SSH server: ' A_LastError
+    Info('Started SSH server: ' sshdPID)
+
+    Info('Starting clone')
+    retries := 5
+    Loop retries {
+        Send('git -c core.sshCommand="ssh ' . sshOptions . '" clone ' . cloneOptions . '{Enter}')
+        Sleep 500
+        Info('Waiting for clone to finish (attempt ' . A_Index . '/' . retries . ')')
+        WinActivate('ahk_id ' . hwnd)
+        matchObj := WaitForRegExInWindowsTerminal('(Receiving objects: .*, done\.|fatal: early EOF)`r?`nPS .*>[ `n`r]*$', 'Timed out waiting for clone to finish', 'Clone command completed', 15000, 'ahk_id ' . hwnd)
+
+        if InStr(matchObj[1], 'done.')
+            break
+        if A_Index == retries
+            ExitWithError('Clone failed after ' . retries . ' attempts (early EOF)')
+        Info('Clone failed (early EOF), restarting SSH server and retrying...')
+        if DirExist(largeGitClonePath)
+            DirDelete(largeGitClonePath, true)
+        ; Restart sshd for the next attempt (it may have exited after the failed connection)
+        Run(openSSHPath . '\sshd.exe ' . sshdOptions, '', 'Hide', &sshdPID)
+        if A_LastError
+            ExitWithError 'Error restarting SSH server: ' A_LastError
+        Info('Restarted SSH server: ' sshdPID)
+    }
+
+    if not DirExist(largeGitClonePath)
+        ExitWithError('`large-clone` did not work?!?')
 }
 
 Send('exit{Enter}')
