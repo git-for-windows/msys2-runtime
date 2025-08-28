@@ -99,7 +99,7 @@ jobs:
           "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP" -xvf "$RUNNER_TEMP/win32-openssh.zip" &&
           echo "OPENSSH_FOR_WINDOWS_DIRECTORY=$(cygpath -aw "$RUNNER_TEMP/OpenSSH-Win64")" >>$GITHUB_ENV
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           sparse-checkout: |
             ui-tests
