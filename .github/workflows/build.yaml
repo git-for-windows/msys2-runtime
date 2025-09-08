@@ -50,7 +50,7 @@ jobs:
         # Cannot just grab from https://github.com/git-for-windows/git-sdk-64/releases/tag/ci-artifacts
         # because we also need the git-artifacts
         id: ci-artifacts-run-id
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const [ owner, repo ] = process.env.G4W_SDK_REPO.split('/')
