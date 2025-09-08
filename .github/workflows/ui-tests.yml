@@ -76,7 +76,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ahk" &&
           "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP/ahk" -xf "$RUNNER_TEMP/ahk.zip" &&
           cygpath -aw "$RUNNER_TEMP/ahk" >>$GITHUB_PATH
-      - uses: actions/setup-node@v4 # the hook uses node for the background process
+      - uses: actions/setup-node@v5 # the hook uses node for the background process
       - uses: actions/cache/restore@v4
         id: restore-win32-openssh
         with:
