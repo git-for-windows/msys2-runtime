@@ -1189,7 +1189,11 @@ _sys_mbstowcs (mbtowc_p f_mbtowc, wchar_t *dst, size_t dlen, const char *src,
 	    {
 	      bytes = 1;
 	      if (dst)
+#ifdef STRICTLY_7BIT_ASCII
 		*ptr = L'\xf000' | *pmbs;
+#else
+		*ptr = *pmbs;
+#endif
 	    }
 	  memset (&ps, 0, sizeof ps);
 	}
