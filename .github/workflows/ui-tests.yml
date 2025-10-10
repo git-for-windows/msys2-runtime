@@ -96,6 +96,13 @@ jobs:
           "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP" -xvf "$RUNNER_TEMP/win32-openssh.zip" &&
           echo "OPENSSH_FOR_WINDOWS_DIRECTORY=$(cygpath -aw "$RUNNER_TEMP/OpenSSH-Win64")" >>$GITHUB_ENV
 
+      - name: Minimize existing Log window
+        working-directory: ui-tests
+        run: |
+          $exitCode = 0
+          & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force minimize-log-window.ahk "$PWD\minimize-log-window" 2>&1 | Out-Default
+          if (!$?) { $exitCode = 1; echo "::error::Failed to minimize Log window!" } else { echo "::notice::Minimized Log window" }
+          exit $exitCode
       - name: Run UI tests
         id: ui-tests
         timeout-minutes: 10
