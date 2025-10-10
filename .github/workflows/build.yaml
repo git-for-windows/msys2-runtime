@@ -81,7 +81,7 @@ jobs:
           msys2 -c 'pacman --noconfirm -Suu'
 
       - name: Download msys2-runtime artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: install
           path: ${{ steps.msys2.outputs.msys2-location }}
