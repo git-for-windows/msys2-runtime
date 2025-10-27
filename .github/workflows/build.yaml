@@ -80,7 +80,7 @@ jobs:
             exit $?
           done
           ls -la
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
           name: install
           path: install
@@ -94,7 +94,7 @@ jobs:
           tar -C ../install -cf - . | tar xf - &&
           tar cvf - * .[0-9A-Za-z]* | gzip -1 >../git-sdk-x86_64-minimal.tar.gz
       - name: upload minimal-sdk artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: minimal-sdk
           path: git-sdk-x86_64-minimal.tar.gz
@@ -107,7 +107,7 @@ jobs:
           echo "result=$(tar Oxf git-artifacts.tar.gz git/bin-wrappers/git |
             sed -n 's|^GIT_EXEC_PATH='\''\(.*\)/git'\''$|\1|p')" >>$GITHUB_OUTPUT
       - name: upload git artifacts for testing
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: git-artifacts
           path: git-artifacts.tar.gz
