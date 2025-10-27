@@ -33,7 +33,7 @@ jobs:
           make DESTDIR="$(pwd)"/_dest install
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: install
           path: _dest/
@@ -169,7 +169,7 @@ jobs:
           msys2 -c 'pacman --noconfirm -Suu'
 
       - name: Download msys2-runtime artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: install
           path: ${{ steps.msys2.outputs.msys2-location }}
