@@ -117,3 +117,69 @@ WaitForRegExInWindowsTerminal(regex, errorMessage, successMessage, timeout := 50
         }
     }
 }
+
+; Launch mintty with HTML export support. Returns the window handle.
+; Ctrl+F5 is bound to export-html; the file is written to <script-dir>/mintty-export.html.
+LaunchMintty(extraArgs := '') {
+    exportFile := A_ScriptDir . '\mintty-export.html'
+    savePattern := StrReplace(A_ScriptDir, '\', '/') '/mintty-export'
+    minttyClass := 'ahk_class mintty'
+    existing := Map()
+    for h in WinGetList(minttyClass)
+        existing[h] := true
+
+    cmd := 'mintty.exe -o "KeyFunctions=C+F5:export-html" -o "SaveFilename=' savePattern '"'
+    if extraArgs != ''
+        cmd .= ' ' extraArgs
+    cmd .= ' -'
+    Run cmd, , , &childPid
+    Info 'Launched mintty, PID: ' childPid
+
+    hwnd := 0
+    deadline := A_TickCount + 10000
+    while A_TickCount < deadline
+    {
+        for h in WinGetList(minttyClass)
+        {
+            if !existing.Has(h)
+            {
+                hwnd := h
+                break 2
+            }
+        }
+        Sleep 100
+    }
+    if !hwnd
+        ExitWithError 'New mintty window did not appear'
+    WinActivate('ahk_id ' hwnd)
+    Info 'Found new mintty: ' hwnd
+    return hwnd
+}
+
+; Trigger Ctrl+F5 to export mintty's screen as HTML, read it, strip tags,
+; and return the plain text.
+CaptureBufferFromMintty(winTitle := '') {
+    static exportFile := A_ScriptDir . '\mintty-export.html'
+    if FileExist(exportFile)
+        FileDelete exportFile
+    if winTitle != ''
+        WinActivate winTitle
+    Send '^{F5}'
+    deadline := A_TickCount + 3000
+    while !FileExist(exportFile) && A_TickCount < deadline
+        Sleep 50
+    if !FileExist(exportFile)
+        return ''
+    Sleep 100
+    html := FileRead(exportFile)
+    ; Extract body content only (skip CSS in <style>)
+    if RegExMatch(html, 'si)<body[^>]*>(.*)</body>', &m)
+        html := m[1]
+    ; Strip HTML tags
+    text := RegExReplace(html, '<[^>]+>', '')
+    ; Decode common HTML entities
+    text := StrReplace(text, '&lt;', '<')
+    text := StrReplace(text, '&gt;', '>')
+    text := StrReplace(text, '&amp;', '&')
+    return text
+}
