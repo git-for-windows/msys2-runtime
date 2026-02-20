@@ -32,28 +32,25 @@ jobs:
           $p = Get-ChildItem -Recurse "${env:RUNNER_TEMP}\artifacts" | where {$_.Name -eq "msys-2.0.dll"} | Select -ExpandProperty VersionInfo | Select -First 1 -ExpandProperty FileName
           cp $p "c:/Program Files/Git/usr/bin/msys-2.0.dll"
 
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            ui-tests
+
       - uses: actions/cache/restore@v5
         id: restore-wt
         with:
           key: wt-${{ env.WT_VERSION }}
           path: ${{ runner.temp }}/wt.zip
-      - name: Download Windows Terminal
-        if: steps.restore-wt.outputs.cache-hit != 'true'
-        shell: bash
+      - name: Install and configure portable Windows Terminal
+        working-directory: ui-tests
         run: |
-          curl -fLo "$RUNNER_TEMP/wt.zip" \
-          https://github.com/microsoft/terminal/releases/download/v$WT_VERSION/Microsoft.WindowsTerminal_${WT_VERSION}_x64.zip
+          powershell -File setup-portable-wt.ps1 -WtVersion $env:WT_VERSION -DestDir $env:RUNNER_TEMP
       - uses: actions/cache/save@v5
         if: steps.restore-wt.outputs.cache-hit != 'true'
         with:
           key: wt-${{ env.WT_VERSION }}
           path: ${{ runner.temp }}/wt.zip
-      - name: Install Windows Terminal
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          "$WINDIR/system32/tar.exe" -xf "$RUNNER_TEMP/wt.zip" &&
-          cygpath -aw terminal-$WT_VERSION >>$GITHUB_PATH
       - uses: actions/cache/restore@v5
         id: restore-ahk
         with:
@@ -99,10 +96,6 @@ jobs:
           "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP" -xvf "$RUNNER_TEMP/win32-openssh.zip" &&
           echo "OPENSSH_FOR_WINDOWS_DIRECTORY=$(cygpath -aw "$RUNNER_TEMP/OpenSSH-Win64")" >>$GITHUB_ENV
 
-      - uses: actions/checkout@v6
-        with:
-          sparse-checkout: |
-            ui-tests
       - name: Minimize existing Log window
         working-directory: ui-tests
         run: |
