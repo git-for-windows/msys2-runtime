@@ -67,47 +67,9 @@ RunWaitOne(command) {
     return Result
 }
 
-; This function is quite the hack. It assumes that the Windows Terminal is the active window,
-; then drags the mouse diagonally across the window to select all text and then copies it.
-;
-; This is fragile! If any other window becomes active, or if the mouse is moved,
-; the function will not work as intended.
-;
-; An alternative would be to use `ControlSend`, e.g.
-; `ControlSend '+^a', 'Windows.UI.Input.InputSite.WindowClass1', 'ahk_id ' . hwnd
-; This _kinda_ works, the text is selected (all text, in fact), but the PowerShell itself
-; _also_ processes the keyboard events and therefore they leave ugly and unintended
-; `^Ac` characters in the prompt. So that alternative is not really usable.
-CaptureTextFromWindowsTerminal(winTitle := '') {
-    if winTitle != ''
-        WinActivate winTitle
-    ControlGetPos &cx, &cy, &cw, &ch, 'Windows.UI.Composition.DesktopWindowContentBridge1', "A"
-    titleBarHeight := 54
-    scrollBarWidth := 28
-    pad := 8
-
-    SavedClipboard := ClipboardAll
-    A_Clipboard := ''
-    SendMode('Event')
-    if winTitle != ''
-        WinActivate winTitle
-    MouseMove cx + pad, cy + titleBarHeight + pad
-    if winTitle != ''
-        WinActivate winTitle
-    MouseClickDrag 'Left', , , cx + cw - scrollBarWidth, cy + ch - pad, , ''
-    if winTitle != ''
-        WinActivate winTitle
-    MouseClick 'Right'
-    ClipWait()
-    Result := A_Clipboard
-    Clipboard := SavedClipboard
-    return Result
-}
-
 ; Capture the Windows Terminal buffer via the exportBuffer action (Ctrl+Shift+F12).
 ; Requires a portable WT with settings.json that maps Ctrl+Shift+F12 to exportBuffer
-; writing to <script-dir>/wt-buffer-export.txt. Unlike CaptureTextFromWindowsTerminal(),
-; this does not depend on mouse position or window focus quirks.
+; writing to <script-dir>/wt-buffer-export.txt.
 CaptureBufferFromWindowsTerminal(winTitle := '') {
     static exportFile := A_ScriptDir . '\wt-buffer-export.txt'
     if FileExist(exportFile)
