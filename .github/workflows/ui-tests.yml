@@ -114,6 +114,8 @@ jobs:
           $env:LARGE_FILES_DIRECTORY = "${env:RUNNER_TEMP}\large"
           & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force ctrl-c.ahk "$PWD\ctrl-c" 2>&1 | Out-Default
           if (!$?) { $exitCode = 1; echo "::error::Ctrl+C Test failed!" } else { echo "::notice::Ctrl+C Test log" }
+          & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force keystroke-order.ahk "$PWD\keystroke-order" 2>&1 | Out-Default
+          if (!$?) { $exitCode = 1; echo "::error::Keystroke-order Test failed!" } else { echo "::notice::Keystroke-order Test log" }
           exit $exitCode
       - name: Show logs
         if: always()
@@ -121,6 +123,7 @@ jobs:
         run: |
           type bg-hook.log
           type ctrl-c.log
+          type keystroke-order.log
       - name: Take screenshot, if canceled
         id: take-screenshot
         if: cancelled() || failure()
