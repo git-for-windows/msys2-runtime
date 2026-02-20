@@ -43,7 +43,7 @@ WaitForRegExInWindowsTerminal('`n49$', 'Timed out waiting for commit to finish',
 ; Verify that CursorUp shows the previous command
 Send('{Up}')
 Sleep 150
-Text := CaptureTextFromWindowsTerminal()
+Text := CaptureBufferFromWindowsTerminal()
 if not RegExMatch(Text, 'git commit --allow-empty -m zOMG *$')
     ExitWithError 'Cursor Up did not work: ' Text
 Info('Match!')
