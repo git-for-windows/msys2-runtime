@@ -130,7 +130,7 @@ WaitForRegExInWindowsTerminal(regex, errorMessage, successMessage, timeout := 50
     ; Wait for the regex to match in the terminal output
     while true
     {
-        capturedText := CaptureTextFromWindowsTerminal(winTitle)
+        capturedText := CaptureBufferFromWindowsTerminal(winTitle)
         if RegExMatch(capturedText, regex)
             break
         Sleep 100
@@ -138,9 +138,6 @@ WaitForRegExInWindowsTerminal(regex, errorMessage, successMessage, timeout := 50
             Info('Captured text:`n' . capturedText)
             ExitWithError errorMessage
         }
-        if winTitle != ''
-            WinActivate winTitle
-        MouseClick 'WheelDown', , , 20
     }
     Info(successMessage)
 }
