@@ -67,41 +67,24 @@ RunWaitOne(command) {
     return Result
 }
 
-; This function is quite the hack. It assumes that the Windows Terminal is the active window,
-; then drags the mouse diagonally across the window to select all text and then copies it.
-;
-; This is fragile! If any other window becomes active, or if the mouse is moved,
-; the function will not work as intended.
-;
-; An alternative would be to use `ControlSend`, e.g.
-; `ControlSend '+^a', 'Windows.UI.Input.InputSite.WindowClass1', 'ahk_id ' . hwnd
-; This _kinda_ works, the text is selected (all text, in fact), but the PowerShell itself
-; _also_ processes the keyboard events and therefore they leave ugly and unintended
-; `^Ac` characters in the prompt. So that alternative is not really usable.
-CaptureTextFromWindowsTerminal(winTitle := '') {
+; Capture the Windows Terminal buffer via the exportBuffer action (Ctrl+Shift+F12).
+; Requires a portable WT with settings.json that maps Ctrl+Shift+F12 to exportBuffer
+; writing to <script-dir>/wt-buffer-export.txt.
+CaptureBufferFromWindowsTerminal(winTitle := '') {
+    static exportFile := A_ScriptDir . '\wt-buffer-export.txt'
+    if FileExist(exportFile)
+        FileDelete exportFile
     if winTitle != ''
         WinActivate winTitle
-    ControlGetPos &cx, &cy, &cw, &ch, 'Windows.UI.Composition.DesktopWindowContentBridge1', "A"
-    titleBarHeight := 54
-    scrollBarWidth := 28
-    pad := 8
-
-    SavedClipboard := ClipboardAll
-    A_Clipboard := ''
-    SendMode('Event')
-    if winTitle != ''
-        WinActivate winTitle
-    MouseMove cx + pad, cy + titleBarHeight + pad
-    if winTitle != ''
-        WinActivate winTitle
-    MouseClickDrag 'Left', , , cx + cw - scrollBarWidth, cy + ch - pad, , ''
-    if winTitle != ''
-        WinActivate winTitle
-    MouseClick 'Right'
-    ClipWait()
-    Result := A_Clipboard
-    Clipboard := SavedClipboard
-    return Result
+    Sleep 200
+    Send '^+{F12}'
+    deadline := A_TickCount + 3000
+    while !FileExist(exportFile) && A_TickCount < deadline
+        Sleep 50
+    if !FileExist(exportFile)
+        return ''
+    Sleep 100
+    return FileRead(exportFile)
 }
 
 WaitForRegExInWindowsTerminal(regex, errorMessage, successMessage, timeout := 5000, winTitle := '') {
@@ -109,17 +92,16 @@ WaitForRegExInWindowsTerminal(regex, errorMessage, successMessage, timeout := 50
     ; Wait for the regex to match in the terminal output
     while true
     {
-        capturedText := CaptureTextFromWindowsTerminal(winTitle)
-        if RegExMatch(capturedText, regex)
-            break
+        capturedText := CaptureBufferFromWindowsTerminal(winTitle)
+        if RegExMatch(capturedText, regex, &matchObj)
+        {
+            Info(successMessage)
+            return matchObj
+        }
         Sleep 100
         if A_TickCount > timeout {
             Info('Captured text:`n' . capturedText)
             ExitWithError errorMessage
         }
-        if winTitle != ''
-            WinActivate winTitle
-        MouseClick 'WheelDown', , , 20
     }
-    Info(successMessage)
 }
