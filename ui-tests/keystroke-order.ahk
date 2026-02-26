@@ -11,6 +11,13 @@
 ; foreground process (powershell launching MSYS sleep) runs under CPU
 ; stress. If backspace bytes get reordered relative to the characters
 ; they should delete, readline produces wrong output.
+;
+; The test runs in two phases:
+;   Phase 1 (pcon enabled):  the default mode, exercises the pseudo
+;       console oscillation code paths in master::write().
+;   Phase 2 (disable_pcon):  sets MSYS=disable_pcon so that pseudo
+;       console is never created, exercising the non-pcon input routing
+;       and verifying that typeahead is preserved correctly.
 
 SetWorkTree('git-test-keystroke-order')
 
@@ -35,9 +42,22 @@ Info 'Bash prompt appeared'
 stressCmd := 'powershell.exe -File ' StrReplace(A_ScriptDir, '\', '/') '/cpu-stress.ps1'
 Info 'Foreground command: ' stressCmd
 
-; === Test loop ===
+; === Phase 1: pcon enabled (default) ===
+Info '=== Phase 1: pcon enabled ==='
 mismatch := RunKeystrokeTest(winId, stressCmd, testString, 5)
 
+if !mismatch
+{
+    ; === Phase 2: disable_pcon ===
+    Info '=== Phase 2: disable_pcon ==='
+    WinActivate(winId)
+    SetKeyDelay 20, 20
+    SendEvent('{Text}export MSYS=disable_pcon')
+    SendEvent('{Enter}')
+    Sleep 500
+
+    mismatch := RunKeystrokeTest(winId, stressCmd, testString, 5)
+}
 
 WinActivate(winId)
 SetKeyDelay 20, 20
