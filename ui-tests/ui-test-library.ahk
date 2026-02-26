@@ -93,13 +93,15 @@ WaitForRegExInWindowsTerminal(regex, errorMessage, successMessage, timeout := 50
     while true
     {
         capturedText := CaptureBufferFromWindowsTerminal(winTitle)
-        if RegExMatch(capturedText, regex)
-            break
+        if RegExMatch(capturedText, regex, &matchObj)
+        {
+            Info(successMessage)
+            return matchObj
+        }
         Sleep 100
         if A_TickCount > timeout {
             Info('Captured text:`n' . capturedText)
             ExitWithError errorMessage
         }
     }
-    Info(successMessage)
 }
