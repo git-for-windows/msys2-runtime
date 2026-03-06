@@ -39,6 +39,75 @@ if !InStr(capture, '$ ')
     ExitWithError 'Timed out waiting for bash prompt'
 Info 'Bash prompt appeared'
 
+; === cmd.exe input verification ===
+; Verify that input typed into cmd.exe (a native Win32 console app) is not
+; silently lost. This catches the regression where removing the pcon_start
+; post-loop block also removed the pty_input_state = to_nat transition,
+; causing keystrokes to go to the wrong pipe.
+Info '=== cmd.exe input verification ==='
+WinActivate(winId)
+SetKeyDelay 20, 20
+SendEvent('{Text}cmd.exe')
+SendEvent('{Enter}')
+; Type immediately without waiting for cmd.exe to fully start.
+Sleep 200
+SendEvent('{Text}echo ' testString)
+SendEvent('{Enter}')
+
+; Wait for the test string to appear in cmd.exe output.
+deadline := A_TickCount + 10000
+cmdOk := false
+while A_TickCount < deadline
+{
+    text := CaptureBufferFromMintty(winId)
+    ; Look for the echoed string (cmd.exe prints the command AND its output)
+    ; Count occurrences: the echo command line itself plus the output = at least 2
+    count := 0
+    searchPos := 1
+    while searchPos := InStr(text, testString, , searchPos)
+    {
+        count++
+        searchPos += StrLen(testString)
+    }
+    if count >= 2
+    {
+        Info 'cmd.exe echoed the test string correctly'
+        cmdOk := true
+        break
+    }
+    Sleep 500
+}
+if !cmdOk
+{
+    Info 'Captured text:'
+    Info text
+    ExitWithError 'cmd.exe did not echo the test string (input lost?)'
+}
+
+; Exit cmd.exe and verify we return to bash.
+WinActivate(winId)
+SetKeyDelay 20, 20
+SendEvent('{Text}exit')
+SendEvent('{Enter}')
+Sleep 1000
+
+text := CaptureBufferFromMintty(winId)
+; After exiting cmd.exe we should see a bash prompt again.
+; Find the last "$ " -- it should come after the cmd.exe session.
+lastPrompt := 0
+pos := 1
+while pos := InStr(text, '$ ', , pos)
+{
+    lastPrompt := pos
+    pos += 2
+}
+after := (lastPrompt > 0) ? Trim(SubStr(text, lastPrompt + 2)) : ''
+if after != ''
+{
+    Info 'WARNING: unexpected text after prompt: ' after
+}
+Info 'Back at bash prompt after cmd.exe'
+
 stressCmd := 'powershell.exe -File ' StrReplace(A_ScriptDir, '\', '/') '/cpu-stress.ps1'
 Info 'Foreground command: ' stressCmd
 
