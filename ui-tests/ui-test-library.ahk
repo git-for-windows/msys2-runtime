@@ -40,7 +40,19 @@ CleanUpWorkTree() {
 }
 
 Info(text) {
+    global workTree, cannotWriteToStdout
     FileAppend text '`n', workTree '.log'
+    if !IsSet(cannotWriteToStdout)
+    {
+        try
+            FileAppend text '`n', '*'
+        catch as e {
+            if e.__Class == 'OSError' && e.Number == 6
+                cannotWriteToStdout:= false
+            else
+                throw e
+        }
+    }
 }
 
 closeWindow := false
