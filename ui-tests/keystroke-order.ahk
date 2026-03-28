@@ -84,6 +84,44 @@ if !cmdOk
     ExitWithError 'cmd.exe did not echo the test string (input lost?)'
 }
 
+; === Ctrl+H single-character delete verification ===
+; When pseudo console is enabled, conhost.exe may translate Ctrl+H (0x08)
+; into Ctrl+Backspace, which performs word-wise deletion instead of
+; single-character deletion. Verify that Ctrl+H deletes only one char.
+; See: https://inbox.sourceware.org/cygwin-patches/463c3df7-3810-ed9a-9f7c-c2cf4fd6a7b7@gmx.de/
+Info '=== Ctrl+H single-character delete verification ==='
+WinActivate(winId)
+SetKeyDelay 20, 20
+SendEvent('{Text}echo Expresso')
+Sleep 200
+Send '{Ctrl down}h{Ctrl up}'
+Sleep 200
+SendEvent('{Enter}')
+
+deadline := A_TickCount + 10000
+ctrlHOk := false
+while A_TickCount < deadline
+{
+    text := CaptureBufferFromMintty(winId)
+    ; If Ctrl+H correctly deleted only 'o', the command executed was
+    ; "echo Express" and cmd.exe printed "Express" as output.  If Ctrl+H
+    ; did a word-wise delete, "Expresso" was fully erased and cmd.exe
+    ; ran "echo " which prints "ECHO is on." instead.
+    if InStr(text, 'Express') && !InStr(text, 'Expresso')
+    {
+        Info 'Ctrl+H correctly deleted only the last character'
+        ctrlHOk := true
+        break
+    }
+    Sleep 500
+}
+if !ctrlHOk
+{
+    Info 'Captured text:'
+    Info text
+    ExitWithError 'Ctrl+H did not delete a single character (word-wise delete?)'
+}
+
 ; Exit cmd.exe and verify we return to bash.
 WinActivate(winId)
 SetKeyDelay 20, 20
