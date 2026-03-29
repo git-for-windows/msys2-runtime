@@ -32,28 +32,25 @@ jobs:
           $p = Get-ChildItem -Recurse "${env:RUNNER_TEMP}\artifacts" | where {$_.Name -eq "msys-2.0.dll"} | Select -ExpandProperty VersionInfo | Select -First 1 -ExpandProperty FileName
           cp $p "c:/Program Files/Git/usr/bin/msys-2.0.dll"
 
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            ui-tests
+
       - uses: actions/cache/restore@v5
         id: restore-wt
         with:
           key: wt-${{ env.WT_VERSION }}
           path: ${{ runner.temp }}/wt.zip
-      - name: Download Windows Terminal
-        if: steps.restore-wt.outputs.cache-hit != 'true'
-        shell: bash
+      - name: Install and configure portable Windows Terminal
+        working-directory: ui-tests
         run: |
-          curl -fLo "$RUNNER_TEMP/wt.zip" \
-          https://github.com/microsoft/terminal/releases/download/v$WT_VERSION/Microsoft.WindowsTerminal_${WT_VERSION}_x64.zip
+          powershell -File setup-portable-wt.ps1 -WtVersion $env:WT_VERSION -DestDir $env:RUNNER_TEMP
       - uses: actions/cache/save@v5
         if: steps.restore-wt.outputs.cache-hit != 'true'
         with:
           key: wt-${{ env.WT_VERSION }}
           path: ${{ runner.temp }}/wt.zip
-      - name: Install Windows Terminal
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          "$WINDIR/system32/tar.exe" -xf "$RUNNER_TEMP/wt.zip" &&
-          cygpath -aw terminal-$WT_VERSION >>$GITHUB_PATH
       - uses: actions/cache/restore@v5
         id: restore-ahk
         with:
@@ -99,15 +96,10 @@ jobs:
           "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP" -xvf "$RUNNER_TEMP/win32-openssh.zip" &&
           echo "OPENSSH_FOR_WINDOWS_DIRECTORY=$(cygpath -aw "$RUNNER_TEMP/OpenSSH-Win64")" >>$GITHUB_ENV
 
-      - uses: actions/checkout@v6
-        with:
-          sparse-checkout: |
-            ui-tests
       - name: Minimize existing Log window
         working-directory: ui-tests
         run: |
           $exitCode = 0
-          type minimize-log-window.ahk
           & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force minimize-log-window.ahk "$PWD\minimize-log-window" 2>&1 | Out-Default
           if (!$?) { $exitCode = 1; echo "::error::Failed to minimize Log window!" } else { echo "::notice::Minimized Log window" }
           exit $exitCode
@@ -119,11 +111,11 @@ jobs:
           $exitCode = 0
           & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force background-hook.ahk "$PWD\bg-hook" 2>&1 | Out-Default
           if (!$?) { $exitCode = 1; echo "::error::Test failed!" } else { echo "::notice::Test log" }
-          type bg-hook.log
           $env:LARGE_FILES_DIRECTORY = "${env:RUNNER_TEMP}\large"
           & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force ctrl-c.ahk "$PWD\ctrl-c" 2>&1 | Out-Default
           if (!$?) { $exitCode = 1; echo "::error::Ctrl+C Test failed!" } else { echo "::notice::Ctrl+C Test log" }
-          type ctrl-c.log
+          & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force keystroke-order.ahk "$PWD\keystroke-order" 2>&1 | Out-Default
+          if (!$?) { $exitCode = 1; echo "::error::Keystroke-order Test failed!" } else { echo "::notice::Keystroke-order Test log" }
           exit $exitCode
       - name: Show logs
         if: always()
@@ -131,6 +123,7 @@ jobs:
         run: |
           type bg-hook.log
           type ctrl-c.log
+          type keystroke-order.log
       - name: Take screenshot, if canceled
         id: take-screenshot
         if: cancelled() || failure()
