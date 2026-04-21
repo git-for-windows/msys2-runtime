@@ -1,0 +1,174 @@
+name: build
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: setup-msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: msys2-devel base-devel autotools cocom diffutils gcc gettext-devel libiconv-devel make mingw-w64-cross-crt mingw-w64-cross-gcc mingw-w64-cross-zlib perl zlib-devel xmlto docbook-xsl libzstd-devel
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          (cd winsup && ./autogen.sh)
+          ./configure --disable-dependency-tracking --with-msys2-runtime-commit="$GITHUB_SHA"
+          make -j8
+
+      - name: Install
+        shell: msys2 {0}
+        run: |
+          make DESTDIR="$(pwd)"/_dest install
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: install
+          path: _dest/
+
+      - name: Build test programs
+        shell: msys2 {0}
+        run: |
+          make -C x86_64-pc-cygwin/winsup/testsuite -j8 \
+            CFLAGS="-O2 -pipe -ggdb -std=gnu99 -w" check_programs
+
+      - name: Bundle up worktree
+        shell: msys2 {0}
+        run: $WINDIR/system32/tar.exe -czf wt.tgz --exclude _dest --exclude .git --exclude wt.tgz .
+
+      - name: Upload worktree archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: wt.tgz
+          path: wt.tgz
+
+  generate-msys2-tests-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        uses: msys2/msys2-tests/gha-matrix-gen@main
+
+  msys2-tests:
+    needs: [build, generate-msys2-tests-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.generate-msys2-tests-matrix.outputs.matrix) }}
+
+    name: msys2-tests ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      FC: ${{ matrix.fc }}
+    steps:
+      - id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: ${{ matrix.packages }}
+
+      - name: Add staging repo
+        shell: msys2 {0}
+        run: |
+          sed -i '1s|^|[staging]\nServer = https://repo.msys2.org/staging/\nSigLevel = Never\n|' /etc/pacman.conf
+
+      - name: Update using staging
+        shell: pwsh
+        run: |
+          msys2 -c 'pacman --noconfirm -Suuy'
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          msys2 -c 'pacman --noconfirm -Suu'
+
+      - name: Download msys2-runtime artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: install
+          path: ${{ steps.msys2.outputs.msys2-location }}
+
+      - name: uname -a
+        shell: msys2 {0}
+        run: uname -a
+
+      - name: Avoid Rust DLL base collisions
+        if: matrix.msystem == 'MSYS' && matrix.type != 'docker'
+        shell: msys2 {0}
+        run: |
+          # The output path changes ld's automatically generated DLL bases.
+          echo 'CARGO_TARGET_DIR=/tmp/cargo-target' >> "$GITHUB_ENV"
+
+      - name: Run tests
+        uses: msys2/msys2-tests@main
+
+  cygwin-tests:
+    needs: [build]
+    runs-on: windows-latest
+    steps:
+      - name: setup-msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: msys2-devel base-devel diffutils make perl busybox cygutils
+
+      - name: Remove inherited permissions
+        shell: pwsh
+        run: |
+          # Remove inherited ACEs before extracting the POSIX mode tests.
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          icacls . /inheritance:r
+          icacls . /grant Administrators:F
+
+      - name: Download worktree archive
+        uses: actions/download-artifact@v7
+        with:
+          name: wt.tgz
+
+      - name: Extract worktree
+        shell: msys2 {0}
+        run: $WINDIR/system32/tar.exe -xzf wt.tgz
+
+      - name: Run the test suite of Cygwin
+        shell: msys2 {0}
+        run: >-
+          export PATH=/usr/bin:$WINDIR/system32 &&
+          export MAKEFLAGS=-j8 &&
+          export MSYS=winsymlinks:native &&
+          WINSUP=$PWD/x86_64-pc-cygwin/winsup &&
+          mkdir -p "$WINSUP/testsuite/testinst/etc" &&
+          test_root=$(cygpath -m "$WINSUP/testsuite/testinst") &&
+          fstab=$WINSUP/testsuite/testinst/etc/fstab &&
+          printf '%s / auto acl,override 0 0\n' "$test_root" > "$fstab" &&
+          printf 'none / cygdrive acl,posix=0 0 0\n' >> "$fstab" &&
+          cp $WINSUP/cygserver/cygserver.exe $WINSUP/testsuite/testinst/usr/bin/ &&
+          (cd $WINSUP/testsuite/testinst/usr/bin &&
+           PATH=$PWD:$WINDIR/system32
+           pwsh_exe="/c/Program Files/PowerShell/7/pwsh.exe"
+           "$pwsh_exe" -command '& .\cygserver.exe' &) &&
+          (cd $WINSUP && make check AM_COLOR_TESTS=always)
+
+      - name: Upload testsuite logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cygwin-testsuite-logs
+          path: |
+            x86_64-pc-cygwin/winsup/testsuite/**/*.log
+            x86_64-pc-cygwin/winsup/testsuite/**/*.trs
