@@ -23,7 +23,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.msys2-runtime-artifact-name }}
           path: ${{ runner.temp }}/artifacts
@@ -183,7 +183,7 @@ jobs:
           screenshot $bounds "ui-tests/screenshot.png"
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ui-tests-${{ matrix.os }}
           path: ui-tests
