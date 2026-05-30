@@ -116,6 +116,8 @@ jobs:
           if (!$?) { $exitCode = 1; echo "::error::Ctrl+C Test failed!" } else { echo "::notice::Ctrl+C Test log" }
           & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force keystroke-order.ahk "$PWD\keystroke-order" 2>&1 | Out-Default
           if (!$?) { $exitCode = 1; echo "::error::Keystroke-order Test failed!" } else { echo "::notice::Keystroke-order Test log" }
+          & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force pcon-grandchild-input.ahk "$PWD\pcon-grandchild-input" 2>&1 | Out-Default
+          if (!$?) { $exitCode = 1; echo "::error::pcon-grandchild-input Test failed!" } else { echo "::notice::pcon-grandchild-input Test log" }
           exit $exitCode
       - name: Show logs
         if: always()
@@ -124,6 +126,7 @@ jobs:
           type bg-hook.log
           type ctrl-c.log
           type keystroke-order.log
+          type pcon-grandchild-input.log
       - name: Take screenshot, if canceled
         id: take-screenshot
         if: cancelled() || failure()
