@@ -226,6 +226,7 @@ atexit_func (void)
 void
 fhandler_pty_slave::req_fixup_pcon_state (void)
 {
+  ULONGLONG deadline = GetTickCount64 () + 3000;
   while (true)
     {
       WaitForSingleObject (input_mutex, mutex_timeout);
@@ -233,6 +234,10 @@ fhandler_pty_slave::req_fixup_pcon_state (void)
 	break;
       /* Another request is on going. */
       ReleaseMutex (input_mutex);
+      if (GetTickCount64 () > deadline)
+	/* A previous requester is stuck; give up this sync rather than
+	   spin forever. */
+	return;
       yield ();
     }
 
@@ -245,20 +250,47 @@ fhandler_pty_slave::req_fixup_pcon_state (void)
   get_ttyp ()->pcon_start_pid = myself->pid;
   WriteFile (get_output_handle (), "\033[6n", 4, &n, NULL);
   ReleaseMutex (input_mutex);
-  while (get_ttyp ()->pcon_start_pid)
+  deadline = GetTickCount64 () + 3000;
+  while (get_ttyp ()->pcon_start_pid && GetTickCount64 () <= deadline)
     /* wait for completion of fixing-up in master::write(). */
     yield ();
+  /* If the master never answered (e.g. the terminal is going away),
+     clear our own request so a stale pcon_start_pid cannot wedge the
+     next requester. */
+  if (get_ttyp ()->pcon_start_pid == (pid_t) myself->pid)
+    {
+      WaitForSingleObject (input_mutex, mutex_timeout);
+      if (get_ttyp ()->pcon_start_pid == (pid_t) myself->pid)
+	{
+	  get_ttyp ()->req_fixup_pcon_cur_pos = false;
+	  get_ttyp ()->req_xfer_input = false;
+	  get_ttyp ()->pcon_start = false;
+	  get_ttyp ()->pcon_start_pid = 0;
+	}
+      ReleaseMutex (input_mutex);
+    }
 }
 
 void
 fhandler_pty_master::fixup_pcon_cursor_position (int x, int y)
 {
+  /* A malformed or out-of-range reply must not be turned into a wrapped
+     negative COORD. */
+  if (x < 1 || y < 1 || x > 0x7fff || y > 0x7fff)
+    return;
   HANDLE pcon_owner = OpenProcess (PROCESS_DUP_HANDLE, FALSE,
 				   get_ttyp ()->nat_pipe_owner_pid);
+  if (!pcon_owner)
+    /* The nat-pipe owner is gone; nothing to sync to. */
+    return;
   HANDLE h_pcon_out = NULL;
-  DuplicateHandle (pcon_owner, get_ttyp ()->h_pcon_out,
-		   GetCurrentProcess (), &h_pcon_out,
-		   0, TRUE, DUPLICATE_SAME_ACCESS);
+  if (!DuplicateHandle (pcon_owner, get_ttyp ()->h_pcon_out,
+			GetCurrentProcess (), &h_pcon_out,
+			0, TRUE, DUPLICATE_SAME_ACCESS))
+    {
+      CloseHandle (pcon_owner);
+      return;
+    }
   CloseHandle (pcon_owner);
   DWORD target_pid = get_ttyp ()->nat_pipe_owner_pid;
   DWORD resume_pid =
@@ -1051,13 +1083,33 @@ fhandler_pty_slave::open_setup (int flags)
     {
       HANDLE pcon_owner = OpenProcess (PROCESS_DUP_HANDLE, FALSE,
 				       get_ttyp ()->nat_pipe_owner_pid);
-      DuplicateHandle (pcon_owner, get_ttyp ()->h_pcon_in,
-		       GetCurrentProcess (), &get_handle_nat (),
-		       0, TRUE, DUPLICATE_SAME_ACCESS);
-      DuplicateHandle (pcon_owner, get_ttyp ()->h_pcon_out,
-		       GetCurrentProcess (), &get_output_handle_nat (),
-		       0, TRUE, DUPLICATE_SAME_ACCESS);
-      CloseHandle (pcon_owner);
+      if (pcon_owner)
+	{
+	  HANDLE new_in = NULL, new_out = NULL;
+	  bool ok_in = DuplicateHandle (pcon_owner, get_ttyp ()->h_pcon_in,
+				       GetCurrentProcess (), &new_in,
+				       0, TRUE, DUPLICATE_SAME_ACCESS);
+	  bool ok_out = DuplicateHandle (pcon_owner, get_ttyp ()->h_pcon_out,
+				        GetCurrentProcess (), &new_out,
+				        0, TRUE, DUPLICATE_SAME_ACCESS);
+	  if (ok_in && ok_out)
+	    {
+	      /* Close the cyg master-side handles open() installed before
+		 replacing them, so they do not leak. */
+	      CloseHandle (get_handle_nat ());
+	      CloseHandle (get_output_handle_nat ());
+	      set_handle_nat (new_in);
+	      set_output_handle_nat (new_out);
+	    }
+	  else
+	    {
+	      if (new_in)
+		CloseHandle (new_in);
+	      if (new_out)
+		CloseHandle (new_out);
+	    }
+	  CloseHandle (pcon_owner);
+	}
     }
 
   set_flags ((flags & ~O_TEXT) | O_BINARY);
@@ -2391,8 +2443,8 @@ fhandler_pty_master::write (const void *ptr, size_t len)
 	      if (get_ttyp ()->req_fixup_pcon_cur_pos)
 		{
 		  int x, y;
-		  sscanf (wpbuf, "\033[%d;%dR", &y, &x);
-		  fixup_pcon_cursor_position (x, y);
+		  if (sscanf (wpbuf, "\033[%d;%dR", &y, &x) == 2)
+		    fixup_pcon_cursor_position (x, y);
 		  get_ttyp ()->req_fixup_pcon_cur_pos = false;
 		}
 	      else if (!get_ttyp ()->req_xfer_input)
@@ -4016,6 +4068,13 @@ fhandler_pty_slave::close_pseudoconsole (tty *ttyp, DWORD force_switch_to)
 	  ttyp->pcon_activated = false;
 	  ttyp->switch_to_nat_pipe = false;
 	  ttyp->nat_pipe_owner_pid = 0;
+	  /* Safety net: if a req_fixup_pcon_state() requester died without
+	     clearing its slot, do not leave pcon_start_pid set forever. */
+	  if (ttyp->pcon_start_pid == myself->pid)
+	    {
+	      ttyp->pcon_start = false;
+	      ttyp->pcon_start_pid = 0;
+	    }
 	}
       if (ttyp->pcon_handle_ready_event)
 	{
