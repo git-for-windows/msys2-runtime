@@ -37,7 +37,7 @@ jobs:
           sparse-checkout: |
             ui-tests
 
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         id: restore-wt
         with:
           key: wt-${{ env.WT_VERSION }}
@@ -46,12 +46,12 @@ jobs:
         working-directory: ui-tests
         run: |
           powershell -File setup-portable-wt.ps1 -WtVersion $env:WT_VERSION -DestDir $env:RUNNER_TEMP
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: steps.restore-wt.outputs.cache-hit != 'true'
         with:
           key: wt-${{ env.WT_VERSION }}
           path: ${{ runner.temp }}/wt.zip
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         id: restore-ahk
         with:
           key: ahk-${{ env.AUTOHOTKEY_VERSION }}
@@ -62,7 +62,7 @@ jobs:
         run: |
           curl -L -o "$RUNNER_TEMP/ahk.zip" \
             https://github.com/AutoHotkey/AutoHotkey/releases/download/v$AUTOHOTKEY_VERSION/AutoHotkey_$AUTOHOTKEY_VERSION.zip
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: steps.restore-ahk.outputs.cache-hit != 'true'
         with:
           key: ahk-${{ env.AUTOHOTKEY_VERSION }}
@@ -74,7 +74,7 @@ jobs:
           "$WINDIR/system32/tar.exe" -C "$RUNNER_TEMP/ahk" -xf "$RUNNER_TEMP/ahk.zip" &&
           cygpath -aw "$RUNNER_TEMP/ahk" >>$GITHUB_PATH
       - uses: actions/setup-node@v6 # the hook uses node for the background process
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         id: restore-win32-openssh
         with:
           key: win32-openssh-${{ env.WIN32_OPENSSH_VERSION }}
@@ -85,7 +85,7 @@ jobs:
         run: |
           curl -fLo "$RUNNER_TEMP/win32-openssh.zip" \
             https://github.com/PowerShell/Win32-OpenSSH/releases/download/v$WIN32_OPENSSH_VERSION/OpenSSH-Win64.zip
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: steps.restore-win32-openssh.outputs.cache-hit != 'true'
         with:
           key: win32-openssh-${{ env.WIN32_OPENSSH_VERSION }}
