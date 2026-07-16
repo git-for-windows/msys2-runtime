@@ -37,6 +37,42 @@ if !InStr(capture, '$ ')
     ExitWithError 'Timed out waiting for bash prompt'
 Info 'Bash prompt appeared'
 
+; A native Git process starts sh.exe for the alias, which in turn starts
+; native PowerShell.  Verify that PowerShell still sees console input and
+; can query Console.KeyAvailable.  Do not use shell redirection here: it
+; changes Git's handles before pcon setup and masks the regression.
+probeOutput := 'git-alias-console.out'
+probeStatus := 'git-alias-console.status'
+if FileExist(probeOutput)
+    FileDelete probeOutput
+if FileExist(probeStatus)
+    FileDelete probeStatus
+probeCommand := "git -c 'alias.console-probe=!powershell.exe " .
+    "-NoLogo -NoProfile -Command `"\$redirected = " .
+    "[Console]::IsInputRedirected; try { " .
+    "[void][Console]::KeyAvailable; \$status = 0 } catch { \$status = 1 }; " .
+    "Set-Content -NoNewline -Path " probeOutput " -Value \$redirected; " .
+    "Set-Content -NoNewline -Path " probeStatus " -Value \$status; " .
+    "exit \$status`"' console-probe"
+WinActivate(winId)
+SendEvent('{Text}' probeCommand)
+SendEvent('{Enter}')
+
+deadline := A_TickCount + 10000
+while !FileExist(probeStatus) && A_TickCount < deadline
+    Sleep 100
+if !FileExist(probeStatus)
+    ExitWithError 'Timed out waiting for Git alias console probe'
+
+probeRedirected := Trim(FileRead(probeOutput), ' `t`r`n')
+probeExitCode := Trim(FileRead(probeStatus), ' `t`r`n')
+Info 'Git alias console probe output: ' probeRedirected
+Info 'Git alias console probe exit code: ' probeExitCode
+if probeRedirected != 'False'
+    ExitWithError 'PowerShell stdin is redirected through the Git alias'
+if probeExitCode != '0'
+    ExitWithError 'PowerShell could not query Console.KeyAvailable'
+
 ; Launch cmd.exe to activate pseudo console
 WinActivate(winId)
 SetKeyDelay 20, 20
