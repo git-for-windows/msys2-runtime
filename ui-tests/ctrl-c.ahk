@@ -175,18 +175,26 @@ if (openSSHPath != '' and FileExist(openSSHPath . '\sshd.exe')) {
 
     Info('Starting clone')
     retries := 5
+    cloneResultMarker := 'GIT_CLONE_EXIT_CODE='
     Loop retries {
-        Send('git -c core.sshCommand="ssh ' . sshOptions . '" clone ' . cloneOptions . '{Enter}')
+        Send('git -c core.sshCommand="ssh ' . sshOptions . '" clone ' .
+            cloneOptions . '; Write-Output "' . cloneResultMarker .
+            '$LASTEXITCODE"{Enter}')
         Sleep 500
         Info('Waiting for clone to finish (attempt ' . A_Index . '/' . retries . ')')
         WinActivate('ahk_id ' . hwnd)
-        matchObj := WaitForRegExInWindowsTerminal('(Receiving objects: .*, done\.|fatal: early EOF)`r?`nPS .*>[ `n`r]*$', 'Timed out waiting for clone to finish', 'Clone command completed', 15000, 'ahk_id ' . hwnd)
+        matchObj := WaitForRegExInWindowsTerminal(
+            cloneResultMarker . '([0-9]+)`r?`nPS .*>[ `n`r]*$',
+            'Timed out waiting for clone to finish',
+            'Clone command completed', 15000, 'ahk_id ' . hwnd)
 
-        if InStr(matchObj[1], 'done.')
+        if matchObj[1] == '0'
             break
         if A_Index == retries
-            ExitWithError('Clone failed after ' . retries . ' attempts (early EOF)')
-        Info('Clone failed (early EOF), restarting SSH server and retrying...')
+            ExitWithError('Clone failed after ' . retries .
+                ' attempts (exit code ' . matchObj[1] . ')')
+        Info('Clone failed with exit code ' . matchObj[1] .
+            ', restarting SSH server and retrying...')
         if DirExist(largeGitClonePath)
             DirDelete(largeGitClonePath, true)
         ; Restart sshd for the next attempt (it may have exited after the failed connection)
