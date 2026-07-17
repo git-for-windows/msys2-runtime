@@ -32,10 +32,15 @@ WaitForRegExInWindowsTerminal('PS [A-Z]:.*>[ `n`r]*$', 'Timed out waiting for Po
 ; sleep test
 Sleep 1500
 ; The `:;` is needed to force Git to call this via the shell, otherwise `/usr/bin/` would not resolve.
-Send('git -c alias.sleep="{!}:;/usr/bin/sleep" sleep 15{Enter}')
-Sleep 500
+Send('git -c alias.sleep="{!}:;echo __SLEEP_STARTED__;' .
+    '/usr/bin/sleep" sleep 15{Enter}')
+WaitForRegExInWindowsTerminal(
+    '(^|`n)__SLEEP_STARTED__`r?`n',
+    'Timed out waiting for sleep to start', 'Sleep started',
+    10000, 'ahk_id ' . hwnd)
 ; interrupt sleep; Ideally we'd call `Send('^C')` but that would too quick on GitHub Actions' runners.
 ; The idea for this work-around comes from https://www.reddit.com/r/AutoHotkey/comments/aok10s/comment/eg57e81/.
+WinActivate('ahk_id ' . hwnd)
 Send '{Ctrl down}{c down}'
 Sleep 50
 Send '{c up}{Ctrl up}'
