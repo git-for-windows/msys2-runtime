@@ -189,7 +189,7 @@ if (openSSHPath != '' and FileExist(openSSHPath . '\sshd.exe')) {
         Info('Waiting for clone to finish (attempt ' . A_Index . '/' . retries . ')')
         WinActivate('ahk_id ' . hwnd)
         matchObj := WaitForRegExInWindowsTerminal(
-            cloneResultMarker . '([0-9]+)`r?`nPS .*>[ `n`r]*$',
+            cloneResultMarker . '([0-9]+)',
             'Timed out waiting for clone to finish',
             'Clone command completed', 15000, 'ahk_id ' . hwnd)
 
