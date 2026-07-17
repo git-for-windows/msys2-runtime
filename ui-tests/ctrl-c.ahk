@@ -218,6 +218,9 @@ if (openSSHPath != '' and FileExist(openSSHPath . '\sshd.exe')) {
     }
 }
 
+WinActivate('ahk_id ' . hwnd)
 Send('exit{Enter}')
-Sleep 50
+if !WinWaitClose('ahk_id ' . hwnd, , 10)
+    ExitWithError 'PowerShell window did not close'
+Info 'PowerShell window closed'
 CleanUpWorkTree()
