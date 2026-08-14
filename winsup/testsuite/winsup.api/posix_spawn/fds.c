@@ -35,7 +35,7 @@ int main (int argc, char **argv)
   posix_spawn_file_actions_t fa;
   pid_t pid;
   int status;
-  int fd, fdcloexec;
+  int fd, fdcloexec, targetfd;
   char buf[16];
   char *childargv[] = {"fds", "--child", buf, "", NULL};
 
@@ -104,8 +104,8 @@ int main (int argc, char **argv)
 
   /* test addopen followed by same-fd adddup2 */
   errCode (posix_spawn_file_actions_init (&fa));
-  errCode (posix_spawn_file_actions_addopen (&fa, 0, "/dev/zero", O_RDONLY,
-					     0644));
+  errCode (posix_spawn_file_actions_addopen (&fa, 0, "/dev/zero",
+					     O_RDONLY|O_CLOEXEC, 0644));
   errCode (posix_spawn_file_actions_adddup2 (&fa, 0, 0));
   strcpy (buf, "/dev/fd/0");
   childargv[3] = "/dev/zero";
@@ -144,7 +144,50 @@ int main (int argc, char **argv)
   exitStatus (status, 0);
   errCode (posix_spawn_file_actions_destroy (&fa));
 
-  /* TODO: test new fds (open or dup2) not 0 through 2 */
+  /* reserve a currently closed descriptor above stderr */
+  negError (targetfd = fcntl (fd, F_DUPFD, 10));
+  negError (close (targetfd));
+
+  /* test addopen targeting a descriptor above stderr */
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_addopen (&fa, targetfd, "/dev/zero",
+					     O_RDONLY, 0644));
+  sprintf (buf, "/dev/fd/%d", targetfd);
+  childargv[3] = "/dev/zero";
+  errCode (posix_spawn (&pid, MYSELF, &fa, NULL, childargv, environ));
+  negError (waitpid (pid, &status, 0));
+  exitStatus (status, 0);
+  errCode (posix_spawn_file_actions_destroy (&fa));
+
+  /* test addopen with O_CLOEXEC targeting a descriptor above stderr */
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_addopen (&fa, targetfd, "/dev/zero",
+					     O_RDONLY|O_CLOEXEC, 0644));
+  childargv[3] = "<ENOENT>";
+  errCode (posix_spawn (&pid, MYSELF, &fa, NULL, childargv, environ));
+  negError (waitpid (pid, &status, 0));
+  exitStatus (status, 0);
+  errCode (posix_spawn_file_actions_destroy (&fa));
+
+  /* test adddup2 targeting a descriptor above stderr */
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_adddup2 (&fa, fd, targetfd));
+  childargv[3] = "/dev/null";
+  errCode (posix_spawn (&pid, MYSELF, &fa, NULL, childargv, environ));
+  negError (waitpid (pid, &status, 0));
+  exitStatus (status, 0);
+  errCode (posix_spawn_file_actions_destroy (&fa));
+
+  /* closing an already closed descriptor is not an error */
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_addclose (&fa, targetfd));
+  sprintf (buf, "/dev/fd/%d", fd);
+  childargv[3] = "/dev/null";
+  errCode (posix_spawn (&pid, MYSELF, &fa, NULL, childargv, environ));
+  negError (waitpid (pid, &status, 0));
+  exitStatus (status, 0);
+  errCode (posix_spawn_file_actions_destroy (&fa));
+
   /* TODO: test error cases */
 
   negError (close (fd));
