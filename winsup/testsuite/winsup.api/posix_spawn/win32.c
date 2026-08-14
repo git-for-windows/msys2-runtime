@@ -92,6 +92,16 @@ int main (void)
   exitStatus (status, 0);
   errCode (posix_spawn_file_actions_destroy (&fa));
 
+  /* test addopen followed by same-fd adddup2 */
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_addopen (&fa, 0, "/dev/zero",
+					     O_RDONLY|O_CLOEXEC, 0644));
+  errCode (posix_spawn_file_actions_adddup2 (&fa, 0, 0));
+  errCode (posix_spawn (&pid, winchild, &fa, NULL, childargv, environ));
+  negError (waitpid (pid, &status, 0));
+  exitStatus (status, 0);
+  errCode (posix_spawn_file_actions_destroy (&fa));
+
   /* test posix_spawn_file_actions_adddup2 */
   errCode (posix_spawn_file_actions_init (&fa));
   errCode (posix_spawn_file_actions_adddup2 (&fa, fd, 0));
@@ -128,6 +138,7 @@ int main (void)
   negError (waitpid (pid, &status, 0));
   exitStatus (status, 0);
   errCode (posix_spawn_file_actions_destroy (&fa));
+
   free (childargv[2]);
 
   /* test posix_spawn_file_actions_addchdir */
@@ -135,6 +146,16 @@ int main (void)
   errCode (posix_spawn_file_actions_addchdir (&fa, tmpcwd));
   childargv[1] = "CWD";
   childargv[2] = cygwin_create_path (CCP_POSIX_TO_WIN_A|CCP_ABSOLUTE, tmpcwd);
+  errCode (posix_spawn (&pid, winchild, &fa, NULL, childargv, environ));
+  negError (waitpid (pid, &status, 0));
+  exitStatus (status, 0);
+  errCode (posix_spawn_file_actions_destroy (&fa));
+
+  /* test addfchdir through a directory opened by an earlier action */
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_addopen (&fa, 0, tmpcwd,
+					     O_SEARCH|O_DIRECTORY, 0755));
+  errCode (posix_spawn_file_actions_addfchdir (&fa, 0));
   errCode (posix_spawn (&pid, winchild, &fa, NULL, childargv, environ));
   negError (waitpid (pid, &status, 0));
   exitStatus (status, 0);
