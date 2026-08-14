@@ -314,6 +314,7 @@ check_PROGRAMS = \
 	winsup.api/posix_spawn/chdir \
 	winsup.api/posix_spawn/errors \
 	winsup.api/posix_spawn/fds \
+	winsup.api/posix_spawn/pgroup \
 	winsup.api/posix_spawn/signals \
 	winsup.api/posix_spawn/spawnp \
 	winsup.api/posix_spawn/win32 \
