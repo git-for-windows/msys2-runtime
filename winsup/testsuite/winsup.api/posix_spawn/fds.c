@@ -102,6 +102,26 @@ int main (int argc, char **argv)
   exitStatus (status, 0);
   errCode (posix_spawn_file_actions_destroy (&fa));
 
+  /* test addopen followed by same-fd adddup2 */
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_addopen (&fa, 0, "/dev/zero", O_RDONLY,
+					     0644));
+  errCode (posix_spawn_file_actions_adddup2 (&fa, 0, 0));
+  strcpy (buf, "/dev/fd/0");
+  childargv[3] = "/dev/zero";
+  errCode (posix_spawn (&pid, MYSELF, &fa, NULL, childargv, environ));
+  negError (waitpid (pid, &status, 0));
+  exitStatus (status, 0);
+  errCode (posix_spawn_file_actions_destroy (&fa));
+
+  /* a closed descriptor cannot be the source of a later adddup2 */
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_addclose (&fa, fd));
+  errCode (posix_spawn_file_actions_adddup2 (&fa, fd, 0));
+  spawnErrorExpected (EBADF, pid,
+      posix_spawn (&pid, MYSELF, &fa, NULL, childargv, environ));
+  errCode (posix_spawn_file_actions_destroy (&fa));
+
   /* test posix_spawn_file_actions_adddup2 with out to err */
   errCode (posix_spawn_file_actions_init (&fa));
   errCode (posix_spawn_file_actions_addopen (&fa, 1, "/dev/zero", O_WRONLY,

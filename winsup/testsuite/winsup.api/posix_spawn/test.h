@@ -30,6 +30,17 @@
 
 #define errCode(x) errCodeExpected(0, x)
 
+#define spawnErrorExpected(expected, childpid, x) do { \
+  int _errcode = (x); \
+  if (_errcode == 0) \
+    { \
+      int _status; \
+      negError (waitpid ((childpid), &_status, 0)); \
+    } \
+  if (_errcode != (expected)) \
+    error_at_line (1, _errcode, __FILE__, __LINE__, "%s", #x); \
+} while (0)
+
 #define exitStatus(status, expectedExitCode) do { \
   if (WIFSIGNALED ((status))) \
     error_at_line (128 + WTERMSIG ((status)), 0, __FILE__, __LINE__ - 2, \
@@ -50,4 +61,3 @@
 #define MYSELF "/proc/self/exe"
 
 #endif /* _POSIX_SPAWN_TEST_H_ */
-

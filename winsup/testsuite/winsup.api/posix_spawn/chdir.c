@@ -118,6 +118,26 @@ int main (int argc, char **argv)
   errCode (posix_spawn_file_actions_destroy (&fa));
   negError (close (fd));
 
+  /* a closed descriptor cannot be used by a later addfchdir */
+  negError (fd = open (tmpcwd, O_SEARCH|O_DIRECTORY|O_CLOEXEC, 0755));
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_addclose (&fa, fd));
+  errCode (posix_spawn_file_actions_addfchdir_np (&fa, fd));
+  spawnErrorExpected (EBADF, pid,
+      posix_spawn (&pid, MYSELF, &fa, NULL, childargv, environ));
+  errCode (posix_spawn_file_actions_destroy (&fa));
+  negError (close (fd));
+
+  /* addfchdir observes a directory opened by an earlier file action */
+  errCode (posix_spawn_file_actions_init (&fa));
+  errCode (posix_spawn_file_actions_addopen (&fa, 0, tmpcwd,
+					     O_SEARCH|O_DIRECTORY, 0755));
+  errCode (posix_spawn_file_actions_addfchdir_np (&fa, 0));
+  errCode (posix_spawn (&pid, MYSELF, &fa, NULL, childargv, environ));
+  negError (waitpid (pid, &status, 0));
+  exitStatus (status, 0);
+  errCode (posix_spawn_file_actions_destroy (&fa));
+
   /* test posix_spawn_file_actions_addchdir + addopen */
   errCode (posix_spawn_file_actions_init (&fa));
   errCode (posix_spawn_file_actions_addopen (&fa, 0, tmppath, O_RDONLY, 0644));
