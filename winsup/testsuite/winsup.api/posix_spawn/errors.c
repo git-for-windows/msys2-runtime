@@ -35,9 +35,11 @@ int main (void)
   errCodeExpected (ENOENT,
       posix_spawn (&pid, childargv[0], NULL, NULL, childargv, environ));
 
+#ifndef __MSYS__
   /* expected EACCES: posix_spawn with path to non-executable file */
   errCodeExpected (EACCES,
       posix_spawn (&pid, tmppath, NULL, NULL, childargv, environ));
+#endif
 
   negError (chmod (tmppath, 0755));
 
