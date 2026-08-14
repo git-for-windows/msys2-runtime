@@ -1495,6 +1495,79 @@ __posix_spawn_execvpe (const char *path, char * const *argv, char *const *envp,
   return -1;
 }
 
+/* File actions operate on the child's logical descriptor table in order.
+   Keep replacement standard descriptors private in args.stdfds, and track
+   logical closes separately so later actions don't accidentally resolve the
+   corresponding descriptor in the unchanged parent table. */
+static bool
+spawn_fd_is_closed (const int *closed_fds, size_t closed_count, int fd)
+{
+  for (size_t i = 0; i < closed_count; i++)
+    if (closed_fds[i] == fd)
+      return true;
+  return false;
+}
+
+static void
+spawn_fd_mark_closed (int *closed_fds, size_t &closed_count, int fd)
+{
+  if (!spawn_fd_is_closed (closed_fds, closed_count, fd))
+    closed_fds[closed_count++] = fd;
+}
+
+static void
+spawn_fd_mark_open (int *closed_fds, size_t &closed_count, int fd)
+{
+  for (size_t i = 0; i < closed_count; i++)
+    if (closed_fds[i] == fd)
+      {
+	closed_fds[i] = closed_fds[--closed_count];
+	return;
+      }
+}
+
+static int
+spawn_fd_resolve (int fd, const spawn_worker_args &args,
+		  const int *closed_fds, size_t closed_count)
+{
+  if (fd < 0 || spawn_fd_is_closed (closed_fds, closed_count, fd))
+    {
+      set_errno (EBADF);
+      return -1;
+    }
+  if (fd <= 2 && args.stdfds[fd] >= 0)
+    return args.stdfds[fd];
+  if (fcntl (fd, F_GETFD, 0) < 0)
+    return -1;
+  return fd;
+}
+
+static int
+spawn_fd_move_out_of_stdio (int fd)
+{
+  if (fd >= 0 && fd <= 2)
+    {
+      cygheap_fdnew newfd (3);
+      cygheap->fdtab.move_fd (fd, newfd);
+      fd = newfd;
+    }
+  return fd;
+}
+
+static int
+spawn_fd_hide_parent (int fd, int *oldflags, size_t oldflagslen)
+{
+  if (fd < 0 || (size_t) fd >= oldflagslen)
+    return 0;
+
+  int flags = fcntl (fd, F_GETFD, 0);
+  if (flags < 0)
+    return get_errno () == EBADF ? 0 : -1;
+  if (oldflags[fd] == -1)
+    oldflags[fd] = flags;
+  return fcntl (fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
 static int
 do_posix_spawn (pid_t *pid, const char *path,
 		const posix_spawn_file_actions_t *fa,
@@ -1549,110 +1622,177 @@ do_posix_spawn (pid_t *pid, const char *path,
     size_t oldflagslen = cygheap->fdtab.size > 3 ? cygheap->fdtab.size : 3;
     pid_t chpid;
     int oldflags[oldflagslen];
+    size_t action_count = 0;
+    int *closed_fds = NULL;
     int ret = -1;
     memset (oldflags, -1, oldflagslen * sizeof (int));
 
     if (fa)
       {
+	/* Reject unsupported targets before changing any descriptor flags.
+	   The newlib implementation will process the complete action list in
+	   the forked child. */
+	bool unsupported = false;
+	STAILQ_FOREACH(fae, &(*fa)->fa_list, fae_list)
+	  {
+	    action_count++;
+	    switch (fae->fae_action)
+	      {
+	      case __posix_spawn_file_actions_entry::FAE_DUP2:
+		unsupported = fae->fae_newfildes < 0
+			      || fae->fae_newfildes > 2;
+		break;
+	      case __posix_spawn_file_actions_entry::FAE_OPEN:
+		unsupported = fae->fae_fildes < 0 || fae->fae_fildes > 2;
+		break;
+	      case __posix_spawn_file_actions_entry::FAE_CLOSE:
+	      case __posix_spawn_file_actions_entry::FAE_CHDIR:
+	      case __posix_spawn_file_actions_entry::FAE_FCHDIR:
+		break;
+	      default:
+		unsupported = true;
+		break;
+	      }
+	    if (unsupported)
+	      goto closes;
+	  }
+
+	closed_fds = (int *) malloc ((action_count ? action_count : 1)
+				    * sizeof (int));
+	if (!closed_fds)
+	  {
+	    ret = ENOMEM;
+	    goto closes;
+	  }
+	size_t closed_count = 0;
+
 	STAILQ_FOREACH(fae, &(*fa)->fa_list, fae_list)
 	  {
 	    switch (fae->fae_action)
 	      {
 	      case __posix_spawn_file_actions_entry::FAE_DUP2:
-		/* only support new file descriptors 0 through 2 for now as
-		   least-common-denominator for all proceses, and also the
-		   most common operation */
-		if (fae->fae_newfildes < 0 || fae->fae_newfildes > 2)
-		  goto closes;
+		{
+		  int srcfd = spawn_fd_resolve (fae->fae_fildes, args,
+						closed_fds, closed_count);
+		  if (srcfd < 0)
+		    {
+		      ret = get_errno ();
+		      goto closes;
+		    }
 
-		if (args.stdfds[fae->fae_newfildes] != -1)
-		  close (args.stdfds[fae->fae_newfildes]);
+		  int newfd;
+		  if (fae->fae_fildes == fae->fae_newfildes
+		      && args.stdfds[fae->fae_newfildes] >= 0)
+		    newfd = args.stdfds[fae->fae_newfildes];
+		  else
+		    {
+		      newfd = spawn_fd_move_out_of_stdio (dup (srcfd));
+		      if (newfd < 0)
+			{
+			  ret = get_errno ();
+			  goto closes;
+			}
+		      if (args.stdfds[fae->fae_newfildes] >= 0)
+			close (args.stdfds[fae->fae_newfildes]);
+		      if (spawn_fd_hide_parent (fae->fae_newfildes, oldflags,
+						oldflagslen) < 0)
+			{
+			  ret = get_errno ();
+			  close (newfd);
+			  goto closes;
+			}
+		      args.stdfds[fae->fae_newfildes] = newfd;
+		    }
 
-		if (fae->fae_fildes >= 0 && fae->fae_fildes <= 2 &&
-		    args.stdfds[fae->fae_fildes] != -1)
-		  args.stdfds[fae->fae_newfildes] =
-					    dup (args.stdfds[fae->fae_fildes]);
-		else
-		  args.stdfds[fae->fae_newfildes] = dup (fae->fae_fildes);
-
-		if (args.stdfds[fae->fae_newfildes] < 0)
-		  {
-		    args.stdfds[fae->fae_newfildes] = -1;
-		    ret = get_errno ();
-		    goto closes;
-		  }
-
-		if (oldflags[fae->fae_newfildes] == -1)
-		  oldflags[fae->fae_newfildes] = fcntl (fae->fae_newfildes,
-							F_GETFD, 0);
-		fcntl (fae->fae_newfildes, F_SETFD, FD_CLOEXEC);
-		break;
+		  if (fcntl (newfd, F_SETFD, 0) < 0)
+		    {
+		      ret = get_errno ();
+		      goto closes;
+		    }
+		  spawn_fd_mark_open (closed_fds, closed_count,
+				      fae->fae_newfildes);
+		  break;
+		}
 
 	      case __posix_spawn_file_actions_entry::FAE_OPEN:
-		/* only support new file descriptors 0 through 2 for now as
-		   least-common-denominator for all proceses, and also the
-		   most common operation */
-		if (fae->fae_fildes < 0 || fae->fae_fildes > 2)
-		  goto closes;
-		if (args.stdfds[fae->fae_fildes] != -1)
-		  close (args.stdfds[fae->fae_fildes]);
-		args.stdfds[fae->fae_fildes] = openat (args.cwdfd,
-						       fae->fae_path,
-						       fae->fae_oflag,
-						       fae->fae_mode);
+		if (args.stdfds[fae->fae_fildes] >= 0)
+		  {
+		    close (args.stdfds[fae->fae_fildes]);
+		    args.stdfds[fae->fae_fildes] = -1;
+		  }
+		args.stdfds[fae->fae_fildes] =
+		  spawn_fd_move_out_of_stdio (openat (args.cwdfd,
+						      fae->fae_path,
+						      fae->fae_oflag,
+						      fae->fae_mode));
 		if (args.stdfds[fae->fae_fildes] < 0)
 		  {
 		    args.stdfds[fae->fae_fildes] = -1;
 		    ret = get_errno ();
 		    goto closes;
 		  }
-		if (oldflags[fae->fae_fildes] == -1)
-		  oldflags[fae->fae_fildes] = fcntl (fae->fae_fildes, F_GETFD,
-						     0);
-		fcntl (fae->fae_fildes, F_SETFD, FD_CLOEXEC);
-		break;
-	      case __posix_spawn_file_actions_entry::FAE_CLOSE:
-		/* If we're asked to close one of the standard handles, and
-		   we've already opened or duped that handle, mark it as CLOEXEC
-		   rather than actually closing it to make sure the child gets a
-		   closed handle.  If that same handle then gets opened or duped
-		   again later, the existing handle will be closed then */
-		if (fae->fae_fildes >= 0 && fae->fae_fildes <= 2 &&
-		    args.stdfds[fae->fae_fildes] != -1)
-		  {
-		    fcntl (args.stdfds[fae->fae_fildes], F_SETFD, FD_CLOEXEC);
-		  }
-		else if (fae->fae_fildes >= 0 &&
-			 (unsigned) fae->fae_fildes < oldflagslen)
-		  {
-		    if (oldflags[fae->fae_fildes] == -1)
-		      oldflags[fae->fae_fildes] = fcntl (fae->fae_fildes,
-							 F_GETFD, 0);
-		    fcntl (fae->fae_fildes, F_SETFD, FD_CLOEXEC);
-		  }
-		else
-		  {
-		    ret = EBADF;
-		    goto closes;
-		  }
-		break;
-	      case __posix_spawn_file_actions_entry::FAE_FCHDIR:
-		if (args.cwdfd >= 0)
-		  close (args.cwdfd);
-		args.cwdfd = dup (fae->fae_dirfd);
-		if (args.cwdfd < 0)
+		if (spawn_fd_hide_parent (fae->fae_fildes, oldflags,
+					  oldflagslen) < 0)
 		  {
 		    ret = get_errno ();
 		    goto closes;
 		  }
-		/* the cloexec flag will be set or cleared in ch_spawn.worker
-		   as necessary */
-		fcntl (args.cwdfd, F_SETFD, FD_CLOEXEC);
+		spawn_fd_mark_open (closed_fds, closed_count, fae->fae_fildes);
 		break;
+
+	      case __posix_spawn_file_actions_entry::FAE_CLOSE:
+		if (fae->fae_fildes < 0)
+		  {
+		    ret = EBADF;
+		    goto closes;
+		  }
+		if (fae->fae_fildes <= 2
+		    && args.stdfds[fae->fae_fildes] >= 0)
+		  {
+		    close (args.stdfds[fae->fae_fildes]);
+		    args.stdfds[fae->fae_fildes] = -1;
+		  }
+		if (spawn_fd_hide_parent (fae->fae_fildes, oldflags,
+					  oldflagslen) < 0)
+		  {
+		    ret = get_errno ();
+		    goto closes;
+		  }
+		spawn_fd_mark_closed (closed_fds, closed_count, fae->fae_fildes);
+		break;
+
+	      case __posix_spawn_file_actions_entry::FAE_FCHDIR:
+		{
+		  int dirfd = spawn_fd_resolve (fae->fae_dirfd, args,
+						closed_fds, closed_count);
+		  if (dirfd < 0)
+		    {
+		      ret = get_errno ();
+		      goto closes;
+		    }
+		  int newfd = spawn_fd_move_out_of_stdio (dup (dirfd));
+		  if (newfd < 0)
+		    {
+		      ret = get_errno ();
+		      goto closes;
+		    }
+		  if (fcntl (newfd, F_SETFD, FD_CLOEXEC) < 0)
+		    {
+		      ret = get_errno ();
+		      close (newfd);
+		      goto closes;
+		    }
+		  if (args.cwdfd >= 0)
+		    close (args.cwdfd);
+		  args.cwdfd = newfd;
+		  break;
+		}
+
 	      case __posix_spawn_file_actions_entry::FAE_CHDIR:
 		{
-		  int newfd = openat (args.cwdfd, fae->fae_dir,
-				      O_SEARCH|O_DIRECTORY|O_CLOEXEC, 0755);
+		  int newfd = spawn_fd_move_out_of_stdio (
+		    openat (args.cwdfd, fae->fae_dir,
+			    O_SEARCH|O_DIRECTORY|O_CLOEXEC, 0755));
 		  if (newfd < 0)
 		  {
 		    ret = get_errno ();
@@ -1736,6 +1876,7 @@ do_posix_spawn (pid_t *pid, const char *path,
 
 closes:
     int save_errno = get_errno ();
+    free (closed_fds);
     if (sigs)
       cfree (sigs);
     if (args.cwdfd >= 0)
