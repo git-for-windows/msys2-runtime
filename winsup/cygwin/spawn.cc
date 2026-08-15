@@ -10,6 +10,8 @@ details. */
 #include <stdlib.h>
 #include <unistd.h>
 #include <process.h>
+#include <spawn.h>
+#include <sys/queue.h>
 #include <sys/wait.h>
 #include <wchar.h>
 #include <ctype.h>
@@ -29,6 +31,7 @@ details. */
 #include "winf.h"
 #include "ntdll.h"
 #include "shared_info.h"
+#include "../posix/posix_spawn.h"
 
 /* Add .exe to PROG if not already present and see if that exists.
    If not, return PROG (converted from posix to win32 rules if necessary).
@@ -37,12 +40,25 @@ details. */
    Returns (possibly NULL) suffix */
 
 static const char *
-perhaps_suffix (const char *prog, path_conv& buf, int& err, unsigned opt)
+perhaps_suffix (const char *prog, path_conv& buf, int& err, unsigned opt,
+		int cwdfd)
 {
+  tmp_pathbuf tp;
   const char *ext;
 
   err = 0;
   debug_printf ("prog '%s'", prog);
+  if (cwdfd != AT_FDCWD && !isabspath_strict (prog))
+    {
+      char *tmp = tp.c_get ();
+      if (gen_full_path_at (tmp, cwdfd, prog))
+	{
+	  err = get_errno ();
+	  return NULL;
+	}
+      prog = tmp;
+    }
+
   buf.check (prog,
 	     PC_SYM_FOLLOW | PC_SYM_NOFOLLOW_REP | PC_NULLEMPTY | PC_POSIX,
 	     stat_suffixes);
@@ -79,7 +95,7 @@ perhaps_suffix (const char *prog, path_conv& buf, int& err, unsigned opt)
    and NULL is returned.  */
 const char *
 find_exec (const char *name, path_conv& buf, const char *search,
-	   unsigned opt, const char **known_suffix)
+	   unsigned opt, const char **known_suffix, int cwdfd)
 {
   const char *suffix = "";
   const char *retval = NULL;
@@ -94,7 +110,7 @@ find_exec (const char *name, path_conv& buf, const char *search,
 
   /* Check to see if file can be opened as is first. */
   if ((has_slash || opt & FE_CWD)
-      && (suffix = perhaps_suffix (name, buf, err, opt)) != NULL)
+      && (suffix = perhaps_suffix (name, buf, err, opt, cwdfd)) != NULL)
     {
       /* Overwrite potential symlink target with original path.
 	 See comment preceeding this method. */
@@ -153,7 +169,7 @@ find_exec (const char *name, path_conv& buf, const char *search,
 
       int err1;
 
-      if ((suffix = perhaps_suffix (tmp_path, buf, err1, opt)) != NULL)
+      if ((suffix = perhaps_suffix (tmp_path, buf, err1, opt, cwdfd)) != NULL)
 	{
 	  if (buf.has_acls () && check_file_access (buf, X_OK, true))
 	    continue;
@@ -279,9 +295,8 @@ extern "C" void __posix_spawn_sem_release (void *sem, int error);
 extern DWORD mutex_timeout; /* defined in fhandler_termios.cc */
 
 int
-child_info_spawn::worker (const char *prog_arg, const char *const *argv,
-			  const char *const envp[], int mode,
-			  int in__stdin, int in__stdout)
+child_info_spawn::worker (int mode, const char *prog_arg,
+			  const spawn_worker_args &args)
 {
   bool rc;
   int res = -1;
@@ -320,7 +335,7 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
   syscall_printf ("mode = %d, prog_arg = %.9500s", mode, prog_arg);
 
   /* FIXME: This is no error condition on Linux. */
-  if (argv == NULL)
+  if (args.argv == NULL)
     {
       syscall_printf ("argv is NULL");
       set_errno (EINVAL);
@@ -358,24 +373,84 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
 	 We need to quote any argument that has whitespace or embedded "'s.  */
 
       int ac;
-      for (ac = 0; argv[ac]; ac++)
+      for (ac = 0; args.argv[ac]; ac++)
 	;
 
       int err;
       const char *ext;
-      if ((ext = perhaps_suffix (prog_arg, real_path, err, FE_NADA)) == NULL)
+      if ((ext = perhaps_suffix (prog_arg, real_path, err, FE_NADA,
+				 args.cwdfd)) == NULL)
 	{
 	  set_errno (err);
 	  res = -1;
 	  __leave;
 	}
 
-      res = newargv.setup (prog_arg, real_path, ext, ac, argv, p_type_exec);
+      res = newargv.setup (prog_arg, real_path, ext, ac, args.argv, p_type_exec,
+			   args.cwdfd);
 
       if (res)
 	__leave;
 
-      if (!real_path.iscygexec () && ::cygheap->cwd.get_error ())
+      LPWSTR cwd = NULL;
+      if (real_path.iscygexec ())
+	{
+	  moreinfo->argc = newargv.argc;
+	  moreinfo->argv = newargv;
+	  moreinfo->cwdfd = args.cwdfd;
+	}
+
+      if (args.cwdfd > 0)
+        {
+	  cygheap_fdget cfd (args.cwdfd);
+	  if (cfd < 0)
+	    {
+	      set_errno (EBADF);
+	      res = -1;
+	      __leave;
+	    }
+	  cfd->set_close_on_exec (!real_path.iscygexec ());
+	  if (!real_path.iscygexec ())
+	    {
+	      PUNICODE_STRING natcwd = cfd->pc.get_nt_native_path ();
+	      cwd = tp.w_get ();
+	      USHORT len = natcwd->Length / sizeof (WCHAR);
+	      if (RtlEqualUnicodePathPrefix (natcwd, &ro_u_natp, FALSE))
+		{
+		  cwd = cfd->pc.get_wide_win32_path (cwd);
+		  if (len < MAX_PATH + 2)
+		    {
+		      if (cwd[5] == L':')
+			cwd += 4;
+		      else
+			*(cwd += 6) = L'\\';
+		    }
+		  else
+		    {
+		      set_errno (ENAMETOOLONG);
+		      res = -1;
+		      __leave;
+		    }
+		}
+	      else if (len <
+			NT_MAX_PATH - ro_u_globalroot.Length / sizeof (WCHAR))
+		{
+		  UNICODE_STRING ucwd;
+
+		  RtlInitEmptyUnicodeString (&ucwd, cwd,
+					    (NT_MAX_PATH - 1) * sizeof (WCHAR));
+		  RtlCopyUnicodeString (&ucwd, &ro_u_globalroot);
+		  RtlAppendUnicodeStringToString (&ucwd, natcwd);
+		}
+	      else
+		{
+		  set_errno (ENAMETOOLONG);
+		  res = -1;
+		  __leave;
+		}
+	    }
+	}
+      else if (!real_path.iscygexec () && ::cygheap->cwd.get_error ())
 	{
 	  small_printf ("Error: Current working directory %s.\n"
 			"Can't start native Windows application from here.\n\n",
@@ -385,12 +460,7 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
 	  __leave;
 	}
 
-      if (real_path.iscygexec ())
-	{
-	  moreinfo->argc = newargv.argc;
-	  moreinfo->argv = newargv;
-	}
-      else
+      if (!real_path.iscygexec ())
 	{
 	  for (int i = 0; i < newargv.argc; i++)
 	    {
@@ -404,6 +474,7 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
 	      free (tmpbuf);
 	    }
 	}
+
       if ((wincmdln || !real_path.iscygexec ())
 	   && !cmd.fromargv (newargv, real_path.get_win32 (),
 			     real_path.iscygexec ()))
@@ -535,9 +606,9 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
       bool switch_user = ::cygheap->user.issetuid ()
 			 && (::cygheap->user.saved_uid
 			     != ::cygheap->user.real_uid);
-      bool keep_posix = (iscmd (argv[0], "strace.exe")
-			|| iscmd (argv[0], "strace")) ? true : real_path.iscygexec ();
-      moreinfo->envp = build_env (envp, envblock, moreinfo->envc,
+      bool keep_posix = (iscmd (args.argv[0], "strace.exe")
+			|| iscmd (args.argv[0], "strace")) ? true : real_path.iscygexec ();
+      moreinfo->envp = build_env (args.envp, envblock, moreinfo->envc,
 				  real_path.iscygexec (),
 				  switch_user ? ::cygheap->user.primary_token ()
 					      : NULL,
@@ -549,8 +620,11 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
 	  __leave;
 	}
       set (chtype, real_path.iscygexec ());
-      __stdin = in__stdin;
-      __stdout = in__stdout;
+      __stdin = args.stdfds[0];
+      __stdout = args.stdfds[1];
+      __stderr = args.stdfds[2];
+      if (args.sigmask)
+	sigmask = *args.sigmask;
       record_children ();
 
       si.lpReserved2 = (LPBYTE) this;
@@ -574,7 +648,8 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
 	 they ignore it explicitely.  CREATE_NEW_PROCESS_GROUP does that for us. */
       pid_t ctty_pgid =
 	::cygheap->ctty ? ::cygheap->ctty->tc_getpgid () : 0;
-      if (!iscygwin () && ctty_pgid && ctty_pgid != myself->pgid)
+      if (!iscygwin () && ctty_pgid &&
+	  ctty_pgid != (args.pgid == -1 ? myself->pgid : args.pgid))
 	c_flags |= CREATE_NEW_PROCESS_GROUP;
 
       if (mode == _P_DETACH)
@@ -607,9 +682,9 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
 			 PROCESS_QUERY_LIMITED_INFORMATION))
 	sa = &sec_none_nih;
 
-      int fileno_stdin = in__stdin < 0 ? 0 : in__stdin;
-      int fileno_stdout = in__stdout < 0 ? 1 : in__stdout;
-      int fileno_stderr = 2;
+      int fileno_stdin = args.stdfds[0] < 0 ? 0 : args.stdfds[0];
+      int fileno_stdout = args.stdfds[1] < 0 ? 1 : args.stdfds[1];
+      int fileno_stderr = args.stdfds[2] < 0 ? 2 : args.stdfds[2];
 
       bool no_pcon = mode != _P_OVERLAY && mode != _P_WAIT;
       term_spawn_worker.setup (iscygwin (), handle (fileno_stdin, false),
@@ -660,7 +735,7 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
 			       TRUE,		/* inherit handles */
 			       c_flags,
 			       envblock,	/* environment */
-			       NULL,
+			       cwd,
 			       &si,
 			       &pi);
 	}
@@ -712,7 +787,7 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
 			       TRUE,		/* inherit handles */
 			       c_flags,
 			       envblock,	/* environment */
-			       NULL,
+			       cwd,
 			       &si,
 			       &pi);
 	  if (hwst)
@@ -820,6 +895,8 @@ child_info_spawn::worker (const char *prog_arg, const char *const *argv,
 	    }
 	  child->dwProcessId = pi.dwProcessId;
 	  child.hProcess = pi.hProcess;
+	  if (args.pgid != -1)
+	    child->pgid = args.pgid ?: cygpid;
 
 	  real_path.get_wide_win32_path (child->progname);
 	  /* This introduces an unreferenced, open handle into the child.
@@ -988,7 +1065,7 @@ spawnve (int mode, const char *path, const char *const *argv,
   switch (_P_MODE (mode))
     {
     case _P_OVERLAY:
-      ch_spawn.worker (path, argv, envp, mode);
+      ch_spawn.worker (mode, path, spawn_worker_args (argv, envp));
       /* Errno should be set by worker.  */
       ret = -1;
       break;
@@ -998,7 +1075,7 @@ spawnve (int mode, const char *path, const char *const *argv,
     case _P_WAIT:
     case _P_DETACH:
     case _P_SYSTEM:
-      ret = ch_spawn_local.worker (path, argv, envp, mode);
+      ret = ch_spawn_local.worker (mode, path, spawn_worker_args (argv, envp));
       break;
     default:
       set_errno (EINVAL);
@@ -1128,7 +1205,7 @@ spawnvpe (int mode, const char *file, const char * const *argv,
 
 int
 av::setup (const char *prog_arg, path_conv& real_path, const char *ext,
-	   int ac_in, const char *const *av_in, bool p_type_exec)
+	   int ac_in, const char *const *av_in, bool p_type_exec, int cwdfd)
 {
   const char *p;
   bool exeext = ascii_strcasematch (ext, ".exe");
@@ -1307,7 +1384,7 @@ av::setup (const char *prog_arg, path_conv& real_path, const char *ext,
 	if (arg1)
 	  unshift (arg1);
 
-	find_exec (pgm, real_path, "PATH", FE_NADA, &ext);
+	find_exec (pgm, real_path, "PATH", FE_NADA, &ext, cwdfd);
 	unshift (real_path.get_posix ());
       }
   if (real_path.iscygexec ())
@@ -1411,9 +1488,431 @@ __posix_spawn_execvpe (const char *path, char * const *argv, char *const *envp,
   if (!envp)
     envp = empty_env;
   ch_spawn.set_sem (sem);
-  ch_spawn.worker (use_env_path ? (find_exec (path, buf, "PATH", FE_NNF) ?: "")
-				: path,
-		   argv, envp, _P_OVERLAY);
+  ch_spawn.worker (_P_OVERLAY,
+       use_env_path ? (find_exec (path, buf, "PATH", FE_NNF) ?: "") : path,
+		   spawn_worker_args (argv, envp));
   __posix_spawn_sem_release (sem, errno);
   return -1;
+}
+
+/* File actions operate on the child's logical descriptor table in order.
+   Keep replacement standard descriptors private in args.stdfds, and track
+   logical closes separately so later actions don't accidentally resolve the
+   corresponding descriptor in the unchanged parent table. */
+static bool
+spawn_fd_is_closed (const int *closed_fds, size_t closed_count, int fd)
+{
+  for (size_t i = 0; i < closed_count; i++)
+    if (closed_fds[i] == fd)
+      return true;
+  return false;
+}
+
+static void
+spawn_fd_mark_closed (int *closed_fds, size_t &closed_count, int fd)
+{
+  if (!spawn_fd_is_closed (closed_fds, closed_count, fd))
+    closed_fds[closed_count++] = fd;
+}
+
+static void
+spawn_fd_mark_open (int *closed_fds, size_t &closed_count, int fd)
+{
+  for (size_t i = 0; i < closed_count; i++)
+    if (closed_fds[i] == fd)
+      {
+	closed_fds[i] = closed_fds[--closed_count];
+	return;
+      }
+}
+
+static int
+spawn_fd_resolve (int fd, const spawn_worker_args &args,
+		  const int *closed_fds, size_t closed_count)
+{
+  if (fd < 0 || spawn_fd_is_closed (closed_fds, closed_count, fd))
+    {
+      set_errno (EBADF);
+      return -1;
+    }
+  if (fd <= 2 && args.stdfds[fd] >= 0)
+    return args.stdfds[fd];
+  if (fcntl (fd, F_GETFD, 0) < 0)
+    return -1;
+  return fd;
+}
+
+static int
+spawn_fd_move_out_of_stdio (int fd)
+{
+  if (fd >= 0 && fd <= 2)
+    {
+      cygheap_fdnew newfd (3);
+      cygheap->fdtab.move_fd (fd, newfd);
+      fd = newfd;
+    }
+  return fd;
+}
+
+static int
+spawn_fd_hide_parent (int fd, int *oldflags, size_t oldflagslen)
+{
+  if (fd < 0 || (size_t) fd >= oldflagslen)
+    return 0;
+
+  int flags = fcntl (fd, F_GETFD, 0);
+  if (flags < 0)
+    return get_errno () == EBADF ? 0 : -1;
+  if (oldflags[fd] == -1)
+    oldflags[fd] = flags;
+  return fcntl (fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
+static int
+do_posix_spawn (pid_t *pid, const char *path,
+		const posix_spawn_file_actions_t *fa,
+		const posix_spawnattr_t *sa, char * const argv[],
+		char * const envp[], int use_env_path)
+{
+  spawn_worker_args args (argv, envp ?: environ);
+  struct sigaction *sigs = NULL;
+  syscall_printf ("posix_spawn%s (%p, %s, %p, %p, %p, %p)",
+      use_env_path ? "p" : "", pid, path, fa, sa, argv, envp);
+
+  /* TODO: possibly implement spawnattr flags:
+     POSIX_SPAWN_RESETIDS
+     POSIX_SPAWN_SETSCHEDPARAM
+     POSIX_SPAWN_SETSCHEDULER */
+  if (sa)
+    {
+      static const short FASTPATH_FLAGS =
+	POSIX_SPAWN_SETSIGMASK|POSIX_SPAWN_SETSIGDEF|POSIX_SPAWN_SETPGROUP;
+      if ((*sa)->sa_flags & ~FASTPATH_FLAGS)
+	goto fallback;
+
+      if ((*sa)->sa_flags & POSIX_SPAWN_SETSIGMASK)
+	args.sigmask = &(*sa)->sa_sigmask;
+
+      if ((*sa)->sa_flags & POSIX_SPAWN_SETPGROUP)
+	{
+	  args.pgid = (*sa)->sa_pgroup;
+	  if (args.pgid < 0)
+	    return EINVAL;
+	  /* According to POSIX there should be more error cases, but setpgid
+	     does not implement them, so replicate its behavior. */
+	}
+
+      if ((*sa)->sa_flags & POSIX_SPAWN_SETSIGDEF)
+	{
+	  sigs = (struct sigaction *) cmalloc (HEAP_SIGS,
+					     _NSIG * sizeof (struct sigaction));
+	  if (!sigs)
+	    return ENOMEM;
+	}
+    }
+
+  {
+    path_conv buf;
+    /* lock the process to temporarily manipulate file descriptors for the
+       spawn operation */
+    lock_process now;
+    posix_spawn_file_actions_entry_t *fae;
+    /* make sure there is enough room in oldflags for the standard descriptors
+       at least */
+    size_t oldflagslen = cygheap->fdtab.size > 3 ? cygheap->fdtab.size : 3;
+    pid_t chpid;
+    int oldflags[oldflagslen];
+    size_t action_count = 0;
+    int *closed_fds = NULL;
+    int ret = -1;
+    memset (oldflags, -1, oldflagslen * sizeof (int));
+
+    if (fa)
+      {
+	/* Reject unsupported targets before changing any descriptor flags.
+	   The newlib implementation will process the complete action list in
+	   the forked child. */
+	bool unsupported = false;
+	STAILQ_FOREACH(fae, &(*fa)->fa_list, fae_list)
+	  {
+	    action_count++;
+	    switch (fae->fae_action)
+	      {
+	      case __posix_spawn_file_actions_entry::FAE_DUP2:
+		unsupported = fae->fae_newfildes < 0
+			      || fae->fae_newfildes > 2;
+		break;
+	      case __posix_spawn_file_actions_entry::FAE_OPEN:
+		unsupported = fae->fae_fildes < 0 || fae->fae_fildes > 2;
+		break;
+	      case __posix_spawn_file_actions_entry::FAE_CLOSE:
+	      case __posix_spawn_file_actions_entry::FAE_CHDIR:
+	      case __posix_spawn_file_actions_entry::FAE_FCHDIR:
+		break;
+	      default:
+		unsupported = true;
+		break;
+	      }
+	    if (unsupported)
+	      goto closes;
+	  }
+
+	closed_fds = (int *) malloc ((action_count ? action_count : 1)
+				    * sizeof (int));
+	if (!closed_fds)
+	  {
+	    ret = ENOMEM;
+	    goto closes;
+	  }
+	size_t closed_count = 0;
+
+	STAILQ_FOREACH(fae, &(*fa)->fa_list, fae_list)
+	  {
+	    switch (fae->fae_action)
+	      {
+	      case __posix_spawn_file_actions_entry::FAE_DUP2:
+		{
+		  int srcfd = spawn_fd_resolve (fae->fae_fildes, args,
+						closed_fds, closed_count);
+		  if (srcfd < 0)
+		    {
+		      ret = get_errno ();
+		      goto closes;
+		    }
+
+		  int newfd;
+		  if (fae->fae_fildes == fae->fae_newfildes
+		      && args.stdfds[fae->fae_newfildes] >= 0)
+		    newfd = args.stdfds[fae->fae_newfildes];
+		  else
+		    {
+		      newfd = spawn_fd_move_out_of_stdio (dup (srcfd));
+		      if (newfd < 0)
+			{
+			  ret = get_errno ();
+			  goto closes;
+			}
+		      if (args.stdfds[fae->fae_newfildes] >= 0)
+			close (args.stdfds[fae->fae_newfildes]);
+		      if (spawn_fd_hide_parent (fae->fae_newfildes, oldflags,
+						oldflagslen) < 0)
+			{
+			  ret = get_errno ();
+			  close (newfd);
+			  goto closes;
+			}
+		      args.stdfds[fae->fae_newfildes] = newfd;
+		    }
+
+		  if (fcntl (newfd, F_SETFD, 0) < 0)
+		    {
+		      ret = get_errno ();
+		      goto closes;
+		    }
+		  spawn_fd_mark_open (closed_fds, closed_count,
+				      fae->fae_newfildes);
+		  break;
+		}
+
+	      case __posix_spawn_file_actions_entry::FAE_OPEN:
+		if (args.stdfds[fae->fae_fildes] >= 0)
+		  {
+		    close (args.stdfds[fae->fae_fildes]);
+		    args.stdfds[fae->fae_fildes] = -1;
+		  }
+		args.stdfds[fae->fae_fildes] =
+		  spawn_fd_move_out_of_stdio (openat (args.cwdfd,
+						      fae->fae_path,
+						      fae->fae_oflag,
+						      fae->fae_mode));
+		if (args.stdfds[fae->fae_fildes] < 0)
+		  {
+		    args.stdfds[fae->fae_fildes] = -1;
+		    ret = get_errno ();
+		    goto closes;
+		  }
+		if (spawn_fd_hide_parent (fae->fae_fildes, oldflags,
+					  oldflagslen) < 0)
+		  {
+		    ret = get_errno ();
+		    goto closes;
+		  }
+		spawn_fd_mark_open (closed_fds, closed_count, fae->fae_fildes);
+		break;
+
+	      case __posix_spawn_file_actions_entry::FAE_CLOSE:
+		if (fae->fae_fildes < 0)
+		  {
+		    ret = EBADF;
+		    goto closes;
+		  }
+		if (fae->fae_fildes <= 2
+		    && args.stdfds[fae->fae_fildes] >= 0)
+		  {
+		    close (args.stdfds[fae->fae_fildes]);
+		    args.stdfds[fae->fae_fildes] = -1;
+		  }
+		if (spawn_fd_hide_parent (fae->fae_fildes, oldflags,
+					  oldflagslen) < 0)
+		  {
+		    ret = get_errno ();
+		    goto closes;
+		  }
+		spawn_fd_mark_closed (closed_fds, closed_count, fae->fae_fildes);
+		break;
+
+	      case __posix_spawn_file_actions_entry::FAE_FCHDIR:
+		{
+		  int dirfd = spawn_fd_resolve (fae->fae_dirfd, args,
+						closed_fds, closed_count);
+		  if (dirfd < 0)
+		    {
+		      ret = get_errno ();
+		      goto closes;
+		    }
+		  int newfd = spawn_fd_move_out_of_stdio (dup (dirfd));
+		  if (newfd < 0)
+		    {
+		      ret = get_errno ();
+		      goto closes;
+		    }
+		  if (fcntl (newfd, F_SETFD, FD_CLOEXEC) < 0)
+		    {
+		      ret = get_errno ();
+		      close (newfd);
+		      goto closes;
+		    }
+		  if (args.cwdfd >= 0)
+		    close (args.cwdfd);
+		  args.cwdfd = newfd;
+		  break;
+		}
+
+	      case __posix_spawn_file_actions_entry::FAE_CHDIR:
+		{
+		  int newfd = spawn_fd_move_out_of_stdio (
+		    openat (args.cwdfd, fae->fae_dir,
+			    O_SEARCH|O_DIRECTORY|O_CLOEXEC, 0755));
+		  if (newfd < 0)
+		  {
+		    ret = get_errno ();
+		    goto closes;
+		  }
+		  if (args.cwdfd >= 0)
+		    close (args.cwdfd);
+		  args.cwdfd = newfd;
+		  break;
+		}
+	      default:
+		goto closes;
+	      }
+	  }
+
+	/* From popen: If fds are in the range of stdin/stdout/stderr, move
+	   them out of the way.  Otherwise, spawn_guts will be confused.
+	   We do this here rather than adding logic to spawn_guts because
+	   spawn_guts is likely to be a more frequently used routine and
+	   having stdin/stdout/stderr closed and reassigned to pipe handles
+	   is an unlikely event. */
+	for (int i = 0; i < 3; i++)
+	  if (args.stdfds[i] >= 0 && args.stdfds[i] <= 2)
+	    {
+	      cygheap_fdnew newfd (3);
+	      cygheap->fdtab.move_fd (args.stdfds[i], newfd);
+	      args.stdfds[i] = newfd;
+	    }
+
+	if (args.cwdfd >= 0 && args.cwdfd <= 2)
+	  {
+	    cygheap_fdnew newfd (3);
+	    cygheap->fdtab.move_fd (args.cwdfd, newfd);
+	    args.cwdfd = newfd;
+	  }
+      }
+
+    if (sigs)
+      {
+	memcpy (sigs, cygheap->sigs, _NSIG * sizeof (struct sigaction));
+	for (int i = 1; i < _NSIG; i++)
+	  {
+	    if ((*sa)->sa_sigdefault & SIGTOMASK (i))
+	      {
+		sigs[i].sa_mask = 0;
+		sigs[i].sa_handler = SIG_DFL;
+		sigs[i].sa_flags &= ~SA_SIGINFO;
+	      }
+	  }
+
+	/* the active signal handler info is kept in global_sigs and
+	   cygheap->sigs is only used for inheritance to child processes, so we
+	   can swap out cygheap->sigs without worrying about messing up the
+	   current process's state.  Use an InterlockedExchange just to be
+	   safe. */
+	sigs = (struct sigaction *) InterlockedExchangePointer (
+						(PVOID *) &cygheap->sigs, sigs);
+      }
+
+    chpid = child_info_spawn (_CH_NADA).worker (_P_NOWAIT,
+	use_env_path ?
+		(find_exec (path, buf, "PATH", FE_NNF, NULL, args.cwdfd) ?: "")
+		     : path,
+	args);
+
+    /* put cygheap->sigs back how we found it (should be the same as
+       global_sigs */
+    if (sigs)
+      sigs = (struct sigaction *) InterlockedExchangePointer (
+						(PVOID *) &cygheap->sigs, sigs);
+
+    if (chpid < 0)
+      {
+	ret = get_errno ();
+      }
+    else
+      {
+	*pid = chpid;
+	ret = 0;
+      }
+
+closes:
+    int save_errno = get_errno ();
+    free (closed_fds);
+    if (sigs)
+      cfree (sigs);
+    if (args.cwdfd >= 0)
+      close (args.cwdfd);
+    for (size_t i = 0; i < 3; i++)
+      if (args.stdfds[i] != -1)
+	close (args.stdfds[i]);
+    for (size_t i = 0; i < oldflagslen; i++)
+      if (oldflags[i] != -1)
+	fcntl (i, F_SETFD, oldflags[i]);
+    set_errno (save_errno);
+    if (ret != -1 && ret != EMFILE && ret != ENFILE)
+      return ret;
+  }
+
+fallback:
+  if (use_env_path)
+    return posix_spawnp (pid, path, fa, sa, argv, envp);
+  else
+    return posix_spawn (pid, path, fa, sa, argv, envp);
+}
+
+extern "C" int
+cygwin_posix_spawn (pid_t *pid, const char *path,
+		    const posix_spawn_file_actions_t *fa,
+		    const posix_spawnattr_t *sa, char * const argv[],
+		    char * const envp[])
+{
+  return do_posix_spawn (pid, path, fa, sa, argv, envp, 0);
+}
+
+extern "C" int
+cygwin_posix_spawnp (pid_t *pid, const char *path,
+		     const posix_spawn_file_actions_t *fa,
+		     const posix_spawnattr_t *sa, char * const argv[],
+		     char * const envp[])
+{
+  return do_posix_spawn (pid, path, fa, sa, argv, envp, 1);
 }

@@ -311,6 +311,13 @@ check_PROGRAMS = \
 	winsup.api/pthread/self2 \
 	winsup.api/pthread/threadidafterfork \
 	winsup.api/pthread/tsd1 \
+	winsup.api/posix_spawn/chdir \
+	winsup.api/posix_spawn/errors \
+	winsup.api/posix_spawn/fds \
+	winsup.api/posix_spawn/pgroup \
+	winsup.api/posix_spawn/signals \
+	winsup.api/posix_spawn/spawnp \
+	winsup.api/posix_spawn/win32 \
 	winsup.api/samples/sample-fail \
 	winsup.api/samples/sample-pass
 # winsup.api/ltp/ulimit01 is omitted as we don't have <ulimit.h>
@@ -318,7 +325,7 @@ check_PROGRAMS = \
 # flags for linking against the just built implib
 # TODO: use -nostdinc and to-be-installed headers as well?
 LDFLAGS_FOR_TESTDLL = -nodefaultlibs
-LDADD_FOR_TESTDLL = $(builddir)/../cygwin/libcygwin.a -lgcc -lkernel32 -luser32
+LDADD_FOR_TESTDLL = $(builddir)/../cygwin/libmsys-2.0.a -lgcc -lkernel32 -luser32
 
 # flags for test executables
 AM_CPPFLAGS = -I$(srcdir)/libltp/include
@@ -344,7 +351,7 @@ XFAIL_TESTS = \
 LOG_COMPILER = $(srcdir)/cygrun.sh
 
 export runtime_root=$(abs_builddir)/testinst/bin
-export cygrun=$(builddir)/mingw/cygrun
+export mingwtestdir=$(builddir)/mingw
 
 # Set up things in the Cygwin 'installation' at testsuite/testinst/ to provide
 # things which tests need to work
