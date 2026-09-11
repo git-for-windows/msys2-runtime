@@ -1767,6 +1767,15 @@ fhandler_pty_slave::tcsetattr (int, const struct termios *t)
   acquire_output_mutex (mutex_timeout);
   get_ttyp ()->ti = *t;
   release_output_mutex ();
+
+  /* Terminal queries can precede the first read/select after entering
+     noncanonical mode.  Their replies must bypass the native console. */
+  if (!(t->c_lflag & ICANON) && get_ttyp ()->pcon_activated
+      && get_ttyp ()->getpgid () == myself->pgid)
+    {
+      mask_switch_to_nat_pipe (true, true);
+      mask_switch_to_nat_pipe (false, false);
+    }
   return 0;
 }
 
