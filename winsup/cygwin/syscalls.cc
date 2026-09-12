@@ -4509,11 +4509,6 @@ popen (const char *command, const char *in_type)
       int stdchild = myix ^ 1;	/* stdchild denotes the index into fd for the
 				   handle which will be redirected to
 				   stdin/stdout */
-      int __std[2];
-      __std[myix] = -1;		/* -1 means don't pass this fd to the child
-				   process */
-      __std[stdchild] = fds[stdchild]; /* Do pass this as the std handle */
-
       const char *argv[4] =
 	{
 	  "/bin/sh",
@@ -4522,11 +4517,17 @@ popen (const char *command, const char *in_type)
 	  NULL
 	};
 
+      spawn_worker_args spawnargs (argv, environ);
+      spawnargs.stdfds[myix] = -1; /* -1 means don't pass this fd to the child
+				      process */
+      spawnargs.stdfds[stdchild] = fds[stdchild]; /* Do pass this as the std
+						     handle */
+
       /* With 'e' flag given, we have to revert the close-on-exec on the child
          end of the pipe.  Otherwise don't pass our end of the pipe to the
 	 child process. */
       if (pipe_flags & O_CLOEXEC)
-	fcntl (__std[stdchild], F_SETFD, 0);
+	fcntl (spawnargs.stdfds[stdchild], F_SETFD, 0);
       else
 	fcntl (myfd, F_SETFD, FD_CLOEXEC);
 
@@ -4538,8 +4539,7 @@ popen (const char *command, const char *in_type)
 
       /* Start a shell process to run the given command without forking. */
       child_info_spawn ch_spawn_local (_CH_NADA);
-      pid_t pid = ch_spawn_local.worker ("/usr/bin/sh", argv, environ, _P_NOWAIT,
-					 __std[0], __std[1]);
+      pid_t pid = ch_spawn_local.worker (_P_NOWAIT, "/usr/bin/sh", spawnargs);
 
       /* Reinstate the close-on-exec state */
       fcntl (stdchild, F_SETFD, stdchild_state);
@@ -4618,9 +4618,9 @@ pclose (FILE *fp)
 
 /* Preliminary(?) implementation of the openat family of functions. */
 
-static int
+int
 gen_full_path_at (char *path_ret, int dirfd, const char *pathname,
-		  int flags = 0)
+		  int flags)
 {
   /* futimesat allows a NULL pathname. */
   if (!pathname && !(flags & _AT_NULL_PATHNAME_ALLOWED))

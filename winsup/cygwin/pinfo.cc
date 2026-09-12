@@ -55,6 +55,7 @@ void
 pinfo::thisproc (HANDLE h)
 {
   procinfo = NULL;
+  bool spawned = h == INVALID_HANDLE_VALUE;
   bool execed = !!h;
 
   DWORD flags = PID_IN_USE | PID_ACTIVE;
@@ -73,7 +74,7 @@ pinfo::thisproc (HANDLE h)
   procinfo->dwProcessId = myself_initial.dwProcessId;
   procinfo->sendsig = myself_initial.sendsig;
   wcscpy (procinfo->progname, myself_initial.progname);
-  if (!execed)
+  if (!execed || spawned)
     create_winpid_symlink ();
   procinfo->exec_sendsig = NULL;
   procinfo->exec_dwProcessId = 0;
