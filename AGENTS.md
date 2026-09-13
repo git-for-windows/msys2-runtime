@@ -162,6 +162,13 @@ Most changes for Git for Windows purposes are in `winsup/cygwin/`. Common areas 
 - Path conversion (`msys2_path_conv.cc`, `path.cc`)
 - Environment handling (`environ.cc`)
 
+### Reviewing Terminal Changes
+
+Use [CYGWIN-REVIEW-CONTRACTS.md](CYGWIN-REVIEW-CONTRACTS.md) for a focused
+review method and source-pinned PTY/PseudoConsole contracts. Check the target
+revision and caller-held locks before applying them. The architecture overview
+below is not a complete lock specification.
+
 ### Testing
 
 - The CI builds the runtime and runs Git's entire test suite against it
@@ -276,8 +283,14 @@ The function is synchronized with `pipe_sw_mutex` to avoid reading inconsistent 
 
 Three cross-process named mutexes protect different aspects of the PTY state:
 
-- **`input_mutex`**: Protects the input data path. Held by `master::write()` while routing input to a pipe, by `transfer_input()` while moving data between pipes, and by `line_edit()` / `accept_input()`.
-- **`pipe_sw_mutex`**: Protects pipe switching state — creation/destruction of the pseudo console, changes to `switch_to_nat_pipe`, `nat_pipe_owner_pid`. Also acquired by `to_be_read_from_nat_pipe()` to read consistent state. The consistent lock ordering is: `pipe_sw_mutex` first, then `input_mutex`.
+- **`input_mutex`**: Protects the input data path. Held by `master::write()`
+  while routing input to a pipe and across input editing/acceptance. Callers
+  must hold it across `transfer_input()`; that function does not acquire it
+  for them.
+- **`pipe_sw_mutex`**: Protects pipe-switching operations, including pseudo
+  console setup and cleanup. Also acquired by `to_be_read_from_nat_pipe()`
+  to read switching state. Native cleanup and `setpgid_aux()` take it before
+  `input_mutex`; trace other callers rather than assuming a universal hierarchy.
 - **`attach_mutex`**: Protects console attachment/detachment operations. Used during `transfer_input()` to prevent races when reading console input records via `ReadConsoleInputA()`, and in `get_winpid_to_hand_over()` to prevent the master process from being misidentified during temporary console attachment.
 
 Because these are **cross-process** named mutexes, they are shared via the kernel between the master (terminal emulator) and slave (bash and its children) processes. Operations that look local in the source code actually have system-wide synchronization effects.
