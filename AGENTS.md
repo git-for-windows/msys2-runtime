@@ -310,7 +310,9 @@ The bugs that cause keystroke reordering are always of the form: some bytes go t
 - **`cleanup_for_non_cygwin_app()`**: Called when the non-Cygwin process exits. First calls `transfer_input(to_cyg)` to move all pending input from the nat pipe (conhost's console buffer) back to the cyg pipe. Then tears down the pcon via `close_pseudoconsole()`. The transfer must happen BEFORE the pcon is closed (while the console is still accessible).
 - **`reset_switch_to_nat_pipe()`**: Cleanup function called from `bg_check()` and `setpgid_aux()`. Detects when the nat pipe owner has exited and resets state. Only performs cleanup when no other process owns the nat pipe and the owner is dead. Does NOT clean up when the owner is self (bash) or alive, to avoid tearing down active sessions.
 - **`transfer_input()`**: Moves pending data between the cyg and nat pipes. When transferring to cyg with pcon active, reads `INPUT_RECORD` events from the console via `ReadConsoleInputA()`. When transferring to cyg, signals `input_transferred_to_cyg` so the master's forward thread can apply `line_edit()` to the transferred bytes.
-- **`setpgid_aux()`**: Called when the foreground process group changes. Triggers `transfer_input` in the appropriate direction. Releases `pipe_sw_mutex` before acquiring `input_mutex` to maintain consistent lock ordering.
+- **`setpgid_aux()`**: Called when the foreground process group changes.
+  Takes `pipe_sw_mutex`, then `input_mutex`, and transfers input while both
+  are held. Releases `input_mutex` before `pipe_sw_mutex`.
 
 ### Debugging Tips
 
