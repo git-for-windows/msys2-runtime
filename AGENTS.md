@@ -169,6 +169,11 @@ review method and source-pinned PTY/PseudoConsole contracts. Check the target
 revision and caller-held locks before applying them. The architecture overview
 below is not a complete lock specification.
 
+For requested reviewer preparation, use
+[CYGWIN-REVIEW-BRIEFINGS.md](CYGWIN-REVIEW-BRIEFINGS.md) for a
+self-contained three-minute briefing format and the evidence-gathering
+workflow needed to support it.
+
 ### Testing
 
 - The CI builds the runtime and runs Git's entire test suite against it
