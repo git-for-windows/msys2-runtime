@@ -162,6 +162,18 @@ Most changes for Git for Windows purposes are in `winsup/cygwin/`. Common areas 
 - Path conversion (`msys2_path_conv.cc`, `path.cc`)
 - Environment handling (`environ.cc`)
 
+### Reviewing Terminal Changes
+
+Use [CYGWIN-REVIEW-CONTRACTS.md](CYGWIN-REVIEW-CONTRACTS.md) for a focused
+review method and source-pinned PTY/PseudoConsole contracts. Check the target
+revision and caller-held locks before applying them. The architecture overview
+below is not a complete lock specification.
+
+For requested reviewer preparation, use
+[CYGWIN-REVIEW-BRIEFINGS.md](CYGWIN-REVIEW-BRIEFINGS.md) for a
+self-contained three-minute briefing format and the evidence-gathering
+workflow needed to support it.
+
 ### Testing
 
 - The CI builds the runtime and runs Git's entire test suite against it
@@ -276,8 +288,14 @@ The function is synchronized with `pipe_sw_mutex` to avoid reading inconsistent 
 
 Three cross-process named mutexes protect different aspects of the PTY state:
 
-- **`input_mutex`**: Protects the input data path. Held by `master::write()` while routing input to a pipe, by `transfer_input()` while moving data between pipes, and by `line_edit()` / `accept_input()`.
-- **`pipe_sw_mutex`**: Protects pipe switching state — creation/destruction of the pseudo console, changes to `switch_to_nat_pipe`, `nat_pipe_owner_pid`. Also acquired by `to_be_read_from_nat_pipe()` to read consistent state. The consistent lock ordering is: `pipe_sw_mutex` first, then `input_mutex`.
+- **`input_mutex`**: Protects the input data path. Held by `master::write()`
+  while routing input to a pipe and across input editing/acceptance. Callers
+  must hold it across `transfer_input()`; that function does not acquire it
+  for them.
+- **`pipe_sw_mutex`**: Protects pipe-switching operations, including pseudo
+  console setup and cleanup. Also acquired by `to_be_read_from_nat_pipe()`
+  to read switching state. Native cleanup and `setpgid_aux()` take it before
+  `input_mutex`; trace other callers rather than assuming a universal hierarchy.
 - **`attach_mutex`**: Protects console attachment/detachment operations. Used during `transfer_input()` to prevent races when reading console input records via `ReadConsoleInputA()`, and in `get_winpid_to_hand_over()` to prevent the master process from being misidentified during temporary console attachment.
 
 Because these are **cross-process** named mutexes, they are shared via the kernel between the master (terminal emulator) and slave (bash and its children) processes. Operations that look local in the source code actually have system-wide synchronization effects.
@@ -310,7 +328,9 @@ The bugs that cause keystroke reordering are always of the form: some bytes go t
 - **`cleanup_for_non_cygwin_app()`**: Called when the non-Cygwin process exits. First calls `transfer_input(to_cyg)` to move all pending input from the nat pipe (conhost's console buffer) back to the cyg pipe. Then tears down the pcon via `close_pseudoconsole()`. The transfer must happen BEFORE the pcon is closed (while the console is still accessible).
 - **`reset_switch_to_nat_pipe()`**: Cleanup function called from `bg_check()` and `setpgid_aux()`. Detects when the nat pipe owner has exited and resets state. Only performs cleanup when no other process owns the nat pipe and the owner is dead. Does NOT clean up when the owner is self (bash) or alive, to avoid tearing down active sessions.
 - **`transfer_input()`**: Moves pending data between the cyg and nat pipes. When transferring to cyg with pcon active, reads `INPUT_RECORD` events from the console via `ReadConsoleInputA()`. When transferring to cyg, signals `input_transferred_to_cyg` so the master's forward thread can apply `line_edit()` to the transferred bytes.
-- **`setpgid_aux()`**: Called when the foreground process group changes. Triggers `transfer_input` in the appropriate direction. Releases `pipe_sw_mutex` before acquiring `input_mutex` to maintain consistent lock ordering.
+- **`setpgid_aux()`**: Called when the foreground process group changes.
+  Takes `pipe_sw_mutex`, then `input_mutex`, and transfers input while both
+  are held. Releases `input_mutex` before `pipe_sw_mutex`.
 
 ### Debugging Tips
 
