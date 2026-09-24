@@ -335,11 +335,13 @@ dtable::init_std_file_from_handle (int fd, HANDLE handle)
 	     the handle as a real console. */
 	  int pcon_minor = cygwin_shared->tty.find_pcon_pty ();
 	  if (pcon_minor >= 0)
-	    dev.parse (FHDEV (DEV_PTYS_MAJOR, pcon_minor));
+	    {
+	      dev.parse (FHDEV (DEV_PTYS_MAJOR, pcon_minor));
+	      CloseHandle (handle);
+	      handle = INVALID_HANDLE_VALUE;
+	    }
 	  else
 	    dev.parse (FH_CONSOLE);
-	  CloseHandle (handle);
-	  handle = INVALID_HANDLE_VALUE;
 	}
     }
   else if (GetCommState (handle, &dcb))
