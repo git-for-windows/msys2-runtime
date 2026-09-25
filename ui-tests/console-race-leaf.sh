@@ -9,4 +9,6 @@ then
 fi
 printf 'hello from TEST %s\n' "$1"
 # Keep a native Windows child alive for a random 0-4 seconds.
-ping.exe -n "$((1 + RANDOM % 5))" 127.0.0.1 >/dev/null
+"$SYSTEMROOT/System32/WindowsPowerShell/v1.0/powershell.exe" \
+  -NoProfile -NonInteractive \
+  -Command "Start-Sleep -Milliseconds $((RANDOM % 4336))"
