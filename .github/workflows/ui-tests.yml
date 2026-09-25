@@ -153,6 +153,32 @@ jobs:
           }
           Write-Output 'All 99 console-mode jobs passed'
           Write-Output "Elapsed time: $($report.elapsedSeconds)s"
+      - name: Test Ctrl+C in a Cygwin/native console pipeline
+        timeout-minutes: 2
+        working-directory: ui-tests
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:ProgramFiles 'Git'
+          $script = Join-Path $PWD 'console-ctrl-c-pipeline.ps1'
+          $result = Join-Path $PWD 'console-ctrl-c-pipeline-result.txt'
+          $arguments = @(
+            '-NoLogo', '-NoProfile', '-File', "`"$script`"",
+            '-RuntimeRoot', "`"$runtimeRoot`"",
+            '-ResultPath', "`"$result`""
+          )
+          $testProcess = Start-Process -FilePath (Get-Command pwsh).Source `
+            -ArgumentList $arguments -WorkingDirectory $PWD `
+            -WindowStyle Normal -Wait -PassThru
+          if ($testProcess.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $result) {
+              throw (Get-Content -LiteralPath $result -Raw)
+            }
+            throw "Pipeline test exited $($testProcess.ExitCode) without result"
+          }
+          $observed = (Get-Content -LiteralPath $result -Raw).Trim()
+          if ($observed -ne 'Interrupted') {
+            throw 'Cygwin/native pipeline did not report an interrupt'
+          }
       - name: Show logs
         if: always()
         working-directory: ui-tests
@@ -167,6 +193,9 @@ jobs:
             Get-Content -LiteralPath console-mode-race-result.json -Raw
           } else {
             Write-Warning 'Console-mode result absent (startup failed or hung)'
+          }
+          if (Test-Path -LiteralPath console-ctrl-c-pipeline-result.txt) {
+            Get-Content -LiteralPath console-ctrl-c-pipeline-result.txt -Raw
           }
       - name: Take screenshot, if canceled
         id: take-screenshot
