@@ -123,6 +123,62 @@ jobs:
           & "${env:RUNNER_TEMP}\ahk\AutoHotKey64.exe" /ErrorStdOut /force pcon-ctrl-c-cmd.ahk "$PWD\pcon-ctrl-c-cmd" 2>&1 | Out-Default
           if (!$?) { $exitCode = 1; echo "::error::pcon-ctrl-c-cmd Test failed!" } else { echo "::notice::pcon-ctrl-c-cmd Test log" }
           exit $exitCode
+      - name: Test console mode with parallel native children
+        timeout-minutes: 7
+        working-directory: ui-tests
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:ProgramFiles 'Git'
+          $script = Join-Path $PWD 'console-mode-race.ps1'
+          $result = Join-Path $PWD 'console-mode-race-result.json'
+          $dll = Join-Path $runtimeRoot 'usr\bin\msys-2.0.dll'
+          $dllHash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
+          $arguments = @(
+            '-NoLogo', '-NoProfile', '-File', "`"$script`"",
+            '-RuntimeRoot', "`"$runtimeRoot`"",
+            '-ResultPath', "`"$result`"",
+            '-ExpectedSha256', $dllHash
+          )
+          $testProcess = Start-Process -FilePath (Get-Command pwsh).Source `
+            -ArgumentList $arguments -WorkingDirectory $PWD `
+            -WindowStyle Normal -Wait -PassThru
+          if ($testProcess.ExitCode -ne 0) {
+            throw "Console-mode reproducer exited $($testProcess.ExitCode)"
+          }
+          $report = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+          if (!$report.passed -or $report.requested -ne 99 -or
+              ($report.completed -join ',') -ne ((1..99) -join ',') -or
+              $report.failures.Count -ne 0 -or $report.dllSha256 -ne $dllHash) {
+            throw 'Console-mode reproducer did not complete all 99 jobs'
+          }
+          Write-Output 'All 99 console-mode jobs passed'
+          Write-Output "Elapsed time: $($report.elapsedSeconds)s"
+      - name: Test Ctrl+C in a Cygwin/native console pipeline
+        timeout-minutes: 2
+        working-directory: ui-tests
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:ProgramFiles 'Git'
+          $script = Join-Path $PWD 'console-ctrl-c-pipeline.ps1'
+          $result = Join-Path $PWD 'console-ctrl-c-pipeline-result.txt'
+          $arguments = @(
+            '-NoLogo', '-NoProfile', '-File', "`"$script`"",
+            '-RuntimeRoot', "`"$runtimeRoot`"",
+            '-ResultPath', "`"$result`""
+          )
+          $testProcess = Start-Process -FilePath (Get-Command pwsh).Source `
+            -ArgumentList $arguments -WorkingDirectory $PWD `
+            -WindowStyle Normal -Wait -PassThru
+          if ($testProcess.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $result) {
+              throw (Get-Content -LiteralPath $result -Raw)
+            }
+            throw "Pipeline test exited $($testProcess.ExitCode) without result"
+          }
+          $observed = (Get-Content -LiteralPath $result -Raw).Trim()
+          if ($observed -ne 'Interrupted') {
+            throw 'Cygwin/native pipeline did not report an interrupt'
+          }
       - name: Show logs
         if: always()
         working-directory: ui-tests
@@ -133,6 +189,14 @@ jobs:
           type pcon-grandchild-input.log
           type pcon-tcflush.log
           type pcon-ctrl-c-cmd.log
+          if (Test-Path -LiteralPath console-mode-race-result.json) {
+            Get-Content -LiteralPath console-mode-race-result.json -Raw
+          } else {
+            Write-Warning 'Console-mode result absent (startup failed or hung)'
+          }
+          if (Test-Path -LiteralPath console-ctrl-c-pipeline-result.txt) {
+            Get-Content -LiteralPath console-ctrl-c-pipeline-result.txt -Raw
+          }
       - name: Take screenshot, if canceled
         id: take-screenshot
         if: cancelled() || failure()
