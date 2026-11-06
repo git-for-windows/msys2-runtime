@@ -3723,9 +3723,16 @@ restart:
       if (upath.Length <= 14)
 	goto file_not_symlink;
 
-      /* Offline files, even if reparse points, are not symlinks. */
+      /* Offline files, even if reparse points, are not symlinks.  Their
+	 reparse point is never read, so drop the REPARSE attribute as
+	 check_reparse_point does for every tag it does not recognize.
+	 Otherwise rename2 takes the file for a volume mount point and
+	 fails with EBUSY. */
       if (isoffline (fileattr ()))
-	goto file_not_symlink;
+	{
+	  fileattr (fileattr () & ~FILE_ATTRIBUTE_REPARSE_POINT);
+	  goto file_not_symlink;
+	}
 
       /* Reparse points are potentially symlinks.  This check must be
 	 performed before checking the SYSTEM attribute for sysfile
