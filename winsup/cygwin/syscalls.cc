@@ -2496,10 +2496,10 @@ rename2 (const char *oldpath, const char *newpath, unsigned int at2flags)
 		   && !RtlEqualUnicodePathSuffix (newpc.get_nt_native_path (),
 						  &ro_u_lnk, TRUE))
 	    rename_append_suffix (newpc, newpath, nlen, ".lnk");
-	  else if (oldpc.is_binary () && !old_explicit_suffix
-		   && oldpc.known_suffix ()
+	  else if (!old_explicit_suffix && oldpc.known_suffix ()
 		   && !nt_path_has_executable_suffix
-						(newpc.get_nt_native_path ()))
+						(newpc.get_nt_native_path ())
+		   && oldpc.is_binary ())
 	    /* Never append .exe suffix if oldpath had .exe suffix given
 	       explicitely, or if oldpath wasn't already a .exe file, or
 	       if the destination filename has one of the blessed executable
@@ -2510,6 +2510,14 @@ rename2 (const char *oldpath, const char *newpath, unsigned int at2flags)
 	}
       else
 	{
+	  /* is_binary opens the file and reads it, which recalls an offline
+	     file, so only ask when the answer changes what happens below. */
+	  bool tacked_on = !old_explicit_suffix && oldpc.known_suffix ();
+	  bool clash = (newpc.is_lnk_special ()
+			|| RtlEqualUnicodePathSuffix (newpc.get_nt_native_path (),
+						      &ro_u_exe, TRUE))
+		       && !new_explicit_suffix;
+
 	  if (equal_path && old_explicit_suffix != new_explicit_suffix)
 	    {
 	      newpc.check (newpath, PC_SYM_NOFOLLOW);
@@ -2531,13 +2539,13 @@ rename2 (const char *oldpath, const char *newpath, unsigned int at2flags)
 		  removepc = &newpc;
 		}
 	    }
-	  else if (oldpc.is_binary ())
+	  else if ((tacked_on || clash) && oldpc.is_binary ())
 	    {
 	      /* Never append .exe suffix if oldpath had .exe suffix given
 		 explicitely, or if newfile is a binary (in which case the given
 		 name probably makes sense as it is), or if the destination
 		 filename has one of the blessed executable suffixes. */
-	      if (!old_explicit_suffix && oldpc.known_suffix ()
+	      if (tacked_on
 		  && !newpc.is_binary ()
 		  && !nt_path_has_executable_suffix
 						(newpc.get_nt_native_path ()))
@@ -2553,10 +2561,7 @@ rename2 (const char *oldpath, const char *newpath, unsigned int at2flags)
 		 rename to the new name without suffix, as expected, but also
 		 remove the clashing symlink or executable.  Did I ever mention
 		 how I hate the file suffix idea? */
-	      if ((newpc.is_lnk_special ()
-		   || RtlEqualUnicodePathSuffix (newpc.get_nt_native_path (),
-						 &ro_u_exe, TRUE))
-		  && !new_explicit_suffix)
+	      if (clash)
 		{
 		  new2pc.check (newpath, PC_SYM_NOFOLLOW, stat_suffixes);
 		  newpc.get_nt_native_path ()->Length -= 4 * sizeof (WCHAR);
