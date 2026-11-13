@@ -34,6 +34,37 @@ HANDLE NO_COPY cygwin_user_h;
 
 static HANDLE NO_COPY shared_parent_dir;
 
+/* AppContainer processes can't create objects in the global or session
+   namespaces, so create the parent directories below the AppContainer's
+   private named object directory instead.  Let Windows compute its path,
+   so child AppContainers end up below their parent's directory. */
+static HANDLE
+get_appcontainer_dir (PCWSTR prefix)
+{
+  UNICODE_STRING acdir;
+  NTSTATUS status = RtlGetAppContainerNamedObjectPath (NULL, NULL, FALSE,
+						       &acdir);
+  if (!NT_SUCCESS (status))
+    api_fatal ("RtlGetAppContainerNamedObjectPath: %y", status);
+
+  WCHAR path[MAX_PATH];
+  __small_swprintf (path, L"%S\\%W%s%s-%S", &acdir, prefix,
+		    cygwin_version.shared_id,
+		    _cygwin_testing ? cygwin_version.dll_build_date : "",
+		    &cygheap->installation_key);
+  RtlFreeUnicodeString (&acdir);
+
+  HANDLE dir;
+  UNICODE_STRING uname;
+  OBJECT_ATTRIBUTES attr;
+  RtlInitUnicodeString (&uname, path);
+  InitializeObjectAttributes (&attr, &uname, OBJ_OPENIF, NULL, NULL);
+  status = NtCreateDirectoryObject (&dir, CYG_SHARED_DIR_ACCESS, &attr);
+  if (!NT_SUCCESS (status))
+    api_fatal ("NtCreateDirectoryObject(%S): %y", &uname, status);
+  return dir;
+}
+
 HANDLE
 get_shared_parent_dir ()
 {
@@ -43,6 +74,9 @@ get_shared_parent_dir ()
 
   if (!shared_parent_dir)
     {
+      if (appcontainer_sid ())
+	return shared_parent_dir = get_appcontainer_dir (L"");
+
       WCHAR bnoname[MAX_PATH];
       __small_swprintf (bnoname, L"\\BaseNamedObjects\\%s%s-%S",
 			cygwin_version.shared_id,
@@ -70,6 +104,9 @@ get_session_parent_dir ()
 
   if (!session_parent_dir)
     {
+      if (appcontainer_sid ())
+	return session_parent_dir = get_appcontainer_dir (L"Session-");
+
       PROCESS_SESSION_INFORMATION psi;
       status = NtQueryInformationProcess (NtCurrentProcess (),
 					  ProcessSessionInformation,
